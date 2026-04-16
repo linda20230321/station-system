@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>商务候车室管理 - 编辑页面</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f0f2f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        
+        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 15px 20px; border-radius: 12px; margin-bottom: 20px; }
+        .header h1 { font-size: 20px; margin-bottom: 5px; }
+        .header p { font-size: 12px; opacity: 0.9; }
+        
+        .back-bar { margin-bottom: 15px; }
+        .btn-back { background: #6c757d; color: white; padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+        .btn-back:hover { background: #5a6268; }
+        
+        .btn { padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all 0.2s; margin: 0 2px; }
+        .btn-primary { background: #2a5298; color: white; }
+        .btn-primary:hover { background: #1e3c72; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
+        .btn-warning { background: #ffc107; color: #333; }
+        .btn-warning:hover { background: #e0a800; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        
+        .section { background: white; border-radius: 10px; padding: 15px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+        .section h2 { margin-bottom: 15px; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0; color: #1e3c72; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 16px; }
+        .section-title { font-size: 16px; border-left: 3px solid #2a5298; padding-left: 10px; }
+        
+        .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-bottom: 15px; }
+        .form-field { display: flex; flex-direction: column; }
+        .form-field label { font-weight: 600; margin-bottom: 3px; color: #555; font-size: 11px; }
+        .form-field input, .form-field select { padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; }
+        .form-field input:focus, .form-field select:focus { outline: none; border-color: #2a5298; }
+        
+        /* 小卡片样式 */
+        .cards-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 10px; }
+        .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 10px; background: #fafafa; transition: all 0.2s; }
+        .card:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0; }
+        .card-title { font-weight: bold; font-size: 13px; color: #2a5298; }
+        .card-body { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; font-size: 10px; }
+        .card-body .field { color: #666; }
+        .card-body .value { color: #333; font-weight: 500; }
+        .card-actions { margin-top: 8px; text-align: right; }
+        
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: white; border-radius: 10px; padding: 20px; width: 700px; max-width: 90%; max-height: 85%; overflow-y: auto; }
+        .modal-header { font-size: 16px; font-weight: bold; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0; }
+        .modal-footer { margin-top: 15px; text-align: right; }
+        
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+        .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+        
+        .empty-state { text-align: center; padding: 20px; color: #999; font-size: 12px; }
+        .text-right { text-align: right; }
+        
+        .photo-preview { max-width: 60px; max-height: 50px; margin-top: 3px; border-radius: 4px; border: 1px solid #ddd; }
+        .upload-btn { background: #17a2b8; color: white; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; display: inline-block; }
+        
+        .station-info-bar { background: #e8f4f8; padding: 8px 15px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 15px; flex-wrap: wrap; font-size: 12px; }
+        .station-info-item .label { font-weight: 600; color: #555; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="back-bar">
+        <button class="btn-back" onclick="goBack()">← 返回主页面</button>
+    </div>
+    
+    <div class="header">
+        <h1>✏️ 车站休息设施管理系统 - 编辑页面</h1>
+        <p>支持增删改查 · 图片上传</p>
+    </div>
+    
+    <div class="station-info-bar" id="stationInfoBar">
+        <div class="station-info-item"><span class="label">国铁集团：</span><span id="displayRailway">-</span></div>
+        <div class="station-info-item"><span class="label">路局：</span><span id="displayBureau">-</span></div>
+        <div class="station-info-item"><span class="label">站段：</span><span id="displaySection">-</span></div>
+        <div class="station-info-item"><span class="label">车站：</span><span id="displayStation">-</span></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">📋 车站基本信息</span><button class="btn btn-primary" onclick="saveBasicInfo()">💾 保存</button></h2>
+        <div class="form-grid" id="basicInfoForm"></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">🛋️ 开放休息区</span><button class="btn btn-success" onclick="showAddModal('open')">+ 新增</button></h2>
+        <div id="openAreasList" class="cards-container"></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">🏛️ 大型休息厅</span><button class="btn btn-success" onclick="showAddModal('large')">+ 新增</button></h2>
+        <div id="largeHallsList" class="cards-container"></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">🏢 中型休息厅</span><button class="btn btn-success" onclick="showAddModal('medium')">+ 新增</button></h2>
+        <div id="mediumHallsList" class="cards-container"></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">🏠 小型休息厅</span><button class="btn btn-success" onclick="showAddModal('small')">+ 新增</button></h2>
+        <div id="smallHallsList" class="cards-container"></div>
+    </div>
+
+    <div class="section">
+        <h2><span class="section-title">📅 会议室</span><button class="btn btn-success" onclick="showAddModal('meeting')">+ 新增</button></h2>
+        <div id="meetingRoomsList" class="cards-container"></div>
+    </div>
+</div>
+
+<div id="modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header" id="modalTitle">新增设施</div>
+        <div id="modalBody"></div>
+        <div class="modal-footer">
+            <button class="btn btn-warning" onclick="closeModal()">取消</button>
+            <button class="btn btn-primary" onclick="submitModal()">确定</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentData = {};
+    let currentPath = {};
+    let modalType = null;
+    let modalEditId = null;
+    let currentPhotoFile = null;
+    
+    function loadCurrentPath() {
+        const savedPath = sessionStorage.getItem('currentPath');
+        if (savedPath) {
+            currentPath = JSON.parse(savedPath);
+        } else {
+            currentPath = { railway: "国铁集团", bureau: "北京局", section: "客运段", station: "北京南站" };
+        }
+        
+        document.getElementById('displayRailway').innerText = currentPath.railway;
+        document.getElementById('displayBureau').innerText = currentPath.bureau;
+        document.getElementById('displaySection').innerText = currentPath.section;
+        document.getElementById('displayStation').innerText = currentPath.station;
+        
+        loadStationData();
+    }
+    
+    function loadStationData() {
+        fetch(`/api/get_station_data?railway=${encodeURIComponent(currentPath.railway)}&bureau=${encodeURIComponent(currentPath.bureau)}&section=${encodeURIComponent(currentPath.section)}&station=${encodeURIComponent(currentPath.station)}`)
+            .then(res => res.json())
+            .then(data => {
+                currentData = data;
+                renderBasicInfo();
+                renderOpenAreas();
+                renderLargeHalls();
+                renderMediumHalls();
+                renderSmallHalls();
+                renderMeetingRooms();
+            });
+    }
+    
+    function renderBasicInfo() {
+        const basic = currentData.basic_info || {};
+        const fields = [
+            {label:"省份", name:"省", type:"select", options:["北京市","上海市","天津市","重庆市","河北省","山西省","辽宁省","吉林省","黑龙江省","江苏省","浙江省","安徽省","福建省","江西省","山东省","河南省","湖北省","湖南省","广东省","海南省","四川省","贵州省","云南省","陕西省","甘肃省","青海省"]},
+            {label:"城市", name:"市", type:"text"},
+            {label:"区县", name:"区", type:"text"},
+            {label:"街道", name:"街道", type:"text"},
+            {label:"车站等级", name:"车站等级", type:"select", options:["特等站","一等站","二等站","三等站"]},
+            {label:"候车室类型", name:"商务候车室类型", type:"select", options:["商务候车室","商务座候车区","商业候车室"]},
+            {label:"进站通道", name:"专用进站通道", type:"select", options:["有","无"]},
+            {label:"出站通道", name:"专用出站通道", type:"select", options:["有","无"]},
+            {label:"WiFi", name:"有wifi", type:"select", options:["有","无"]},
+            {label:"营业开始", name:"营业时间_开始", type:"time"},
+            {label:"营业结束", name:"营业时间_结束", type:"time"},
+            {label:"服务人员", name:"服务人员数量", type:"number"},
+            {label:"座机", name:"联系电话_座机", type:"text"},
+            {label:"手机", name:"联系电话_手机", type:"text"},
+            {label:"独立停车区", name:"独立停车区", type:"select", options:["有","无"]},
+            {label:"停车位数", name:"停车位数量", type:"number"},
+            {label:"提醒时间", name:"登车提醒时间", type:"number"},
+            {label:"建设情况", name:"建设情况", type:"select", options:["已建成","在建","规划中"]},
+            {label:"出资情况", name:"出资情况", type:"select", options:["路局出资","合资","地方出资","社会资本"]},
+            {label:"资金来源", name:"资金来源", type:"text"},
+            {label:"建设单位", name:"建设单位", type:"text"}
+        ];
+        const container = document.getElementById('basicInfoForm');
+        container.innerHTML = fields.map(f => `
+            <div class="form-field">
+                <label>${f.label}</label>
+                ${f.type === 'select' ? 
+                    `<select id="basic_${f.name.replace(/[^a-zA-Z\u4e00-\u9fa5]/g, '_')}">
+                        ${f.options.map(opt => `<option value="${opt}" ${basic[f.name]===opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                    </select>` :
+                    `<input type="${f.type}" id="basic_${f.name.replace(/[^a-zA-Z\u4e00-\u9fa5]/g, '_')}" value="${basic[f.name] || ''}">`
+                }
+            </div>
+        `).join('');
+    }
+    
+    function saveBasicInfo() {
+        const basic = currentData.basic_info || {};
+        const fields = ["省","市","区","街道","车站等级","商务候车室类型","专用进站通道","专用出站通道","有wifi","营业时间_开始","营业时间_结束","服务人员数量","联系电话_座机","联系电话_手机","独立停车区","停车位数量","登车提醒时间","建设情况","出资情况","资金来源","建设单位"];
+        fields.forEach(f => {
+            const el = document.getElementById(`basic_${f.replace(/[^a-zA-Z\u4e00-\u9fa5]/g, '_')}`);
+            if(el) basic[f] = el.value;
+        });
+        
+        fetch('/api/update_basic', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ railway: currentPath.railway, bureau: currentPath.bureau, section: currentPath.section, station: currentPath.station, basic_info: basic })
+        }).then(() => alert('保存成功'));
+    }
+    
+    function renderOpenAreas() { renderFacilityCards('openAreasList', currentData.open_areas, 'open', '开放休息区', 'price', '元/人/次', true); }
+    function renderLargeHalls() { renderFacilityCards('largeHallsList', currentData.large_halls, 'large', '大型休息厅', 'price_per_hour', '元/小时', true); }
+    function renderMediumHalls() { renderFacilityCards('mediumHallsList', currentData.medium_halls, 'medium', '中型休息厅', 'price_per_hour', '元/小时', true); }
+    function renderSmallHalls() { renderFacilityCards('smallHallsList', currentData.small_halls, 'small', '小型休息厅', 'price_per_hour', '元/小时', true); }
+    function renderMeetingRooms() { renderFacilityCards('meetingRoomsList', currentData.meeting_rooms, 'meeting', '会议室', 'price_per_hour', '元/小时', false); }
+    
+    function renderFacilityCards(containerId, items, type, title, priceField, priceUnit, hasSofa) {
+        const container = document.getElementById(containerId);
+        if(!items || items.length === 0) {
+            container.innerHTML = '<div class="empty-state">暂无数据，点击"新增"添加</div>';
+            return;
+        }
+        
+        container.innerHTML = items.map(item => `
+            <div class="card" data-id="${item.id}">
+                <div class="card-header">
+                    <span class="card-title">${item.name}</span>
+                </div>
+                <div class="card-body">
+                    <div><span class="field">面积:</span> <span class="value">${item.area}㎡</span></div>
+                    <div><span class="field">位置:</span> <span class="value">${item.position || '-'}</span></div>
+                    <div><span class="field">卫生间:</span> <span class="value">${item.has_toilet || '-'}</span></div>
+                    <div><span class="field">操作间:</span> <span class="value">${item.has_kitchen || '-'}</span></div>
+                    ${hasSofa ? `<div><span class="field">沙发:</span> <span class="value">${item.sofa_count || 0}</span></div>` : ''}
+                    <div><span class="field">座位:</span> <span class="value">${item.seat_count || 0}</span></div>
+                    <div><span class="field">价格:</span> <span class="value">${item[priceField] || 0}${priceUnit}</span></div>
+                    <div><span class="field">经营模式:</span> <span class="value">${item.business_mode || '-'}</span></div>
+                    <div><span class="field">经营主体:</span> <span class="value">${(item.business_subject || '').substring(0, 10)}</span></div>
+                    <div><span class="field">合同到期:</span> <span class="value">${item.contract_end_date || '-'}</span></div>
+                    <div><span class="field">合同金额:</span> <span class="value">${item.contract_amount || 0}</span></div>
+                    <div><span class="field">冠名:</span> <span class="value">${item.has_naming || '-'}</span></div>
+                    <div><span class="field">冠名单位:</span> <span class="value">${(item.naming_unit || '').substring(0, 8)}</span></div>
+                </div>
+                <div class="card-actions">
+                    <button class="btn btn-warning" onclick="editItem('${type}', ${item.id})">编辑</button>
+                    <button class="btn btn-danger" onclick="deleteItem('${type}', ${item.id})">删除</button>
+                </div>
+            </div>
+        `).join('');
+    }
+    
+    function showAddModal(type) {
+        modalType = type;
+        modalEditId = null;
+        currentPhotoFile = null;
+        const titleMap = { 'open': '新增开放休息区', 'large': '新增大型休息厅', 'medium': '新增中型休息厅', 'small': '新增小型休息厅', 'meeting': '新增会议室' };
+        document.getElementById('modalTitle').innerText = titleMap[type];
+        
+        let html = getModalFormHtml(type, null);
+        document.getElementById('modalBody').innerHTML = html;
+        document.getElementById('modal').style.display = 'flex';
+    }
+    
+    function editItem(type, id) {
+        modalType = type;
+        modalEditId = id;
+        let item;
+        if(type === 'open') item = currentData.open_areas.find(i => i.id === id);
+        else if(type === 'large') item = currentData.large_halls.find(i => i.id === id);
+        else if(type === 'medium') item = currentData.medium_halls.find(i => i.id === id);
+        else if(type === 'small') item = currentData.small_halls.find(i => i.id === id);
+        else item = currentData.meeting_rooms.find(i => i.id === id);
+        
+        const titleMap = { 'open': '编辑开放休息区', 'large': '编辑大型休息厅', 'medium': '编辑中型休息厅', 'small': '编辑小型休息厅', 'meeting': '编辑会议室' };
+        document.getElementById('modalTitle').innerText = titleMap[type];
+        
+        let html = getModalFormHtml(type, item);
+        document.getElementById('modalBody').innerHTML = html;
+        document.getElementById('modal').style.display = 'flex';
+    }
+    
+    function getModalFormHtml(type, item) {
+        const isEdit = item !== null;
+        const getVal = (field, defaultVal = '') => isEdit ? (item[field] || defaultVal) : defaultVal;
+        
+        if(type === 'open') {
+            return `
+                <div class="form-row"><div class="form-field"><label>名称 *</label><input id="modal_name" value="${getVal('name')}"></div>
+                <div class="form-field"><label>面积(㎡) *</label><input id="modal_area" type="number" value="${getVal('area', 0)}"></div></div>
+                <div class="form-row"><div class="form-field"><label>位置</label><input id="modal_position" value="${getVal('position')}"></div>
+                <div class="form-field"><label>卫生间</label><select id="modal_toilet"><option ${getVal('has_toilet')==='有'?'selected':''}>有</option><option ${getVal('has_toilet')==='无'?'selected':''}>无</option></select></div></div>
+                <div class="form-row"><div class="form-field"><label>操作间</label><select id="modal_kitchen"><option ${getVal('has_kitchen')==='有'?'selected':''}>有</option><option ${getVal('has_kitchen')==='无'?'selected':''}>无</option></select></div>
+                <div class="form-field"><label>沙发数量</label><input id="modal_sofa" type="number" value="${getVal('sofa_count', 0)}"></div></div>
+                <div class="form-row"><div class="form-field"><label>座位数量</label><input id="modal_seat" type="number" value="${getVal('seat_count', 0)}"></div>
+                <div class="form-field"><label>挂牌价</label><input id="modal_price" type="number" value="${getVal('price', 0)}"></div></div>
+                <div class="form-row"><div class="form-field"><label>经营模式</label><select id="modal_business_mode"><option ${getVal('business_mode')==='自营'?'selected':''}>自营</option><option ${getVal('business_mode')==='合作'?'selected':''}>合作</option><option ${getVal('business_mode')==='委托服务'?'selected':''}>委托服务</option></select></div>
+                <div class="form-field"><label>经营主体</label><input id="modal_business_subject" value="${getVal('business_subject')}"></div></div>
+                <div class="form-row"><div class="form-field"><label>收费标准</label><input id="modal_fee_standard" value="${getVal('fee_standard')}"></div>
+                <div class="form-field"><label>合同到期</label><input id="modal_contract_end_date" type="date" value="${getVal('contract_end_date')}"></div></div>
+                <div class="form-row"><div class="form-field"><label>合同金额</label><input id="modal_contract_amount" type="number" value="${getVal('contract_amount', 0)}"></div>
+                <div class="form-field"><label>有冠名</label><select id="modal_has_naming"><option ${getVal('has_naming')==='是'?'selected':''}>是</option><option ${getVal('has_naming')==='否'?'selected':''}>否</option></select></div></div>
+                <div class="form-row"><div class="form-field"><label>冠名单位</label><input id="modal_naming_unit" value="${getVal('naming_unit')}"></div>
+                <div class="form-field"><label>门头照片</label><input type="file" id="modal_photo" accept="image/*" onchange="previewPhoto(this)"><div id="photoPreview"></div></div></div>
+            `;
+        } else {
+            return `
+                <div class="form-row"><div class="form-field"><label>名称 *</label><input id="modal_name" value="${getVal('name')}"></div>
+                <div class="form-field"><label>面积(㎡) *</label><input id="modal_area" type="number" value="${getVal('area', 0)}"></div></div>
+                <div class="form-row"><div class="form-field"><label>位置</label><input id="modal_position" value="${getVal('position')}"></div>
+                <div class="form-field"><label>卫生间</label><select id="modal_toilet"><option ${getVal('has_toilet')==='有'?'selected':''}>有</option><option ${getVal('has_toilet')==='无'?'selected':''}>无</option></select></div></div>
+                <div class="form-row"><div class="form-field"><label>操作间</label><select id="modal_kitchen"><option ${getVal('has_kitchen')==='有'?'selected':''}>有</option><option ${getVal('has_kitchen')==='无'?'selected':''}>无</option></select></div>
+                ${type !== 'meeting' ? `<div class="form-field"><label>沙发数量</label><input id="modal_sofa" type="number" value="${getVal('sofa_count', 0)}"></div>` : '<div class="form-field"><label></label></div>'}
+                </div>
+                <div class="form-row"><div class="form-field"><label>座位数量</label><input id="modal_seat" type="number" value="${getVal('seat_count', 0)}"></div>
+                <div class="form-field"><label>挂牌价</label><input id="modal_price" type="number" value="${getVal('price_per_hour', 0)}"></div></div>
+                <div class="form-row"><div class="form-field"><label>经营模式</label><select id="modal_business_mode"><option ${getVal('business_mode')==='自营'?'selected':''}>自营</option><option ${getVal('business_mode')==='合作'?'selected':''}>合作</option><option ${getVal('business_mode')==='委托服务'?'selected':''}>委托服务</option></select></div>
+                <div class="form-field"><label>经营主体</label><input id="modal_business_subject" value="${getVal('business_subject')}"></div></div>
+                <div class="form-row"><div class="form-field"><label>收费标准</label><input id="modal_fee_standard" value="${getVal('fee_standard')}"></div>
+                <div class="form-field"><label>合同到期</label><input id="modal_contract_end_date" type="date" value="${getVal('contract_end_date')}"></div></div>
+                <div class="form-row"><div class="form-field"><label>合同金额</label><input id="modal_contract_amount" type="number" value="${getVal('contract_amount', 0)}"></div>
+                <div class="form-field"><label>有冠名</label><select id="modal_has_naming"><option ${getVal('has_naming')==='是'?'selected':''}>是</option><option ${getVal('has_naming')==='否'?'selected':''}>否</option></select></div></div>
+                <div class="form-row"><div class="form-field"><label>冠名单位</label><input id="modal_naming_unit" value="${getVal('naming_unit')}"></div>
+                <div class="form-field"><label>门头照片</label><input type="file" id="modal_photo" accept="image/*" onchange="previewPhoto(this)"><div id="photoPreview"></div></div></div>
+            `;
+        }
+    }
+    
+    function previewPhoto(input) {
+        const previewDiv = document.getElementById('photoPreview');
+        if (input.files && input.files[0]) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                previewDiv.innerHTML = `<img src="${e.target.result}" class="photo-preview">`;
+            };
+            reader.readAsDataURL(input.files[0]);
+            currentPhotoFile = input.files[0];
+        }
+    }
+    
+    function uploadPhoto(file) {
+        return new Promise((resolve, reject) => {
+            if (!file) { resolve(''); return; }
+            const formData = new FormData();
+            formData.append('photo', file);
+            fetch('/api/upload_photo', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') resolve(data.url);
+                    else reject(data.message);
+                });
+        });
+    }
+    
+    async function submitModal() {
+        const name = document.getElementById('modal_name')?.value;
+        const area = parseInt(document.getElementById('modal_area')?.value);
+        const position = document.getElementById('modal_position')?.value;
+        const has_toilet = document.getElementById('modal_toilet')?.value;
+        const has_kitchen = document.getElementById('modal_kitchen')?.value;
+        const seat_count = parseInt(document.getElementById('modal_seat')?.value);
+        const price = parseInt(document.getElementById('modal_price')?.value);
+        const business_mode = document.getElementById('modal_business_mode')?.value;
+        const business_subject = document.getElementById('modal_business_subject')?.value;
+        const fee_standard = document.getElementById('modal_fee_standard')?.value;
+        const contract_end_date = document.getElementById('modal_contract_end_date')?.value;
+        const contract_amount = parseInt(document.getElementById('modal_contract_amount')?.value) || 0;
+        const has_naming = document.getElementById('modal_has_naming')?.value;
+        const naming_unit = document.getElementById('modal_naming_unit')?.value;
+        
+        let door_photo = '';
+        if (currentPhotoFile) {
+            door_photo = await uploadPhoto(currentPhotoFile);
+        }
+        
+        let data = { name, area, position, has_toilet, has_kitchen, seat_count, business_mode, business_subject, fee_standard, contract_end_date, contract_amount, has_naming, naming_unit, door_photo };
+        let url = '';
+        
+        if(modalType === 'open') {
+            data.sofa_count = parseInt(document.getElementById('modal_sofa')?.value);
+            data.price = price;
+            url = modalEditId ? `/api/update_open_area/${modalEditId}` : '/api/add_open_area';
+        } else if(modalType === 'large') {
+            data.sofa_count = parseInt(document.getElementById('modal_sofa')?.value);
+            data.price_per_hour = price;
+            url = modalEditId ? `/api/update_large_hall/${modalEditId}` : '/api/add_large_hall';
+        } else if(modalType === 'medium') {
+            data.sofa_count = parseInt(document.getElementById('modal_sofa')?.value);
+            data.price_per_hour = price;
+            url = modalEditId ? `/api/update_medium_hall/${modalEditId}` : '/api/add_medium_hall';
+        } else if(modalType === 'small') {
+            data.sofa_count = parseInt(document.getElementById('modal_sofa')?.value);
+            data.price_per_hour = price;
+            url = modalEditId ? `/api/update_small_hall/${modalEditId}` : '/api/add_small_hall';
+        } else if(modalType === 'meeting') {
+            data.price_per_hour = price;
+            url = modalEditId ? `/api/update_meeting_room/${modalEditId}` : '/api/add_meeting_room';
+        }
+        
+        const payload = {
+            railway: currentPath.railway,
+            bureau: currentPath.bureau,
+            section: currentPath.section,
+            station: currentPath.station,
+            item: data
+        };
+        
+        const method = modalEditId ? 'PUT' : 'POST';
+        fetch(url, { method: method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) })
+            .then(() => { location.reload(); });
+        closeModal();
+    }
+    
+    function deleteItem(type, id) {
+        if(!confirm('确定删除该设施吗？')) return;
+        let url = '';
+        if(type === 'open') url = `/api/delete_open_area/${id}`;
+        else if(type === 'large') url = `/api/delete_large_hall/${id}`;
+        else if(type === 'medium') url = `/api/delete_medium_hall/${id}`;
+        else if(type === 'small') url = `/api/delete_small_hall/${id}`;
+        else if(type === 'meeting') url = `/api/delete_meeting_room/${id}`;
+        
+        fetch(url, {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ railway: currentPath.railway, bureau: currentPath.bureau, section: currentPath.section, station: currentPath.station })
+        }).then(() => { location.reload(); });
+    }
+    
+    function closeModal() { document.getElementById('modal').style.display = 'none'; currentPhotoFile = null; }
+    function goBack() { window.close(); }
+    
+    loadCurrentPath();
+</script>
+</body>
+</html>

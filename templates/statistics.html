@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>客运站商务候车室统计系统 - 动态列筛选</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f0f2f5; }
+        
+        .navbar { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+        .logo { font-size: 18px; font-weight: bold; padding: 15px 0; }
+        .nav-menu { display: flex; flex-wrap: wrap; gap: 5px; }
+        .nav-item { padding: 15px 12px; cursor: pointer; font-size: 13px; transition: all 0.2s; border-bottom: 2px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.1); border-bottom-color: #ffc107; }
+        .nav-item.active { border-bottom-color: #ffc107; background: rgba(255,255,255,0.1); }
+        
+        .app-container { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+        
+        .sidebar { width: 260px; background: white; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar-header { background: #f8f9fa; padding: 12px 15px; border-bottom: 1px solid #e0e0e0; }
+        .sidebar-header h3 { font-size: 14px; color: #1e3c72; }
+        
+        .tree-container { flex: 1; overflow-y: auto; padding: 10px; }
+        
+        .tree-node { user-select: none; margin: 1px 0; }
+        .tree-node-header { display: flex; align-items: center; padding: 6px 5px; cursor: pointer; border-radius: 5px; transition: all 0.2s; font-size: 12px; }
+        .tree-node-header:hover { background: #e8f4f8; }
+        .tree-node-header.selected { background: #2a5298; color: white; }
+        .tree-node-header.selected .node-name { color: white; }
+        .tree-icon { width: 18px; font-size: 12px; margin-right: 4px; }
+        .node-name { font-size: 12px; flex: 1; }
+        .node-count { font-size: 10px; color: #999; margin-left: 5px; }
+        .tree-node-header.selected .node-count { color: rgba(255,255,255,0.7); }
+        .tree-children { margin-left: 18px; display: none; }
+        .tree-children.open { display: block; }
+        
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 15px; }
+        
+        .content-header { margin-bottom: 15px; }
+        .content-header h2 { font-size: 18px; color: #1e3c72; }
+        
+        /* 筛选区域样式扩展 */
+        .filter-section { background: white; border-radius: 12px; padding: 15px 20px; margin-bottom: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .filter-title { font-size: 14px; font-weight: bold; color: #1e3c72; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #e0e0e0; }
+        .filter-row { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; align-items: flex-end; }
+        .filter-group { display: flex; flex-direction: column; }
+        .filter-group label { font-size: 11px; font-weight: 600; margin-bottom: 4px; color: #555; }
+        .filter-group select, .filter-group input { padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; min-width: 130px; }
+        .filter-actions { display: flex; gap: 10px; align-items: center; }
+        
+        .btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .btn-primary { background: #2a5298; color: white; }
+        .btn-primary:hover { background: #1e3c72; }
+        .btn-reset { background: #6c757d; color: white; }
+        .btn-reset:hover { background: #5a6268; }
+        .btn-export { background: #28a745; color: white; }
+        .btn-export:hover { background: #218838; }
+        
+        /* 动态列筛选面板 */
+        .column-filter-panel { background: #f8f9fc; border-radius: 8px; padding: 12px 15px; margin-top: 5px; border: 1px solid #e0e4e8; }
+        .column-filter-title { font-size: 12px; font-weight: bold; color: #1e3c72; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+        .column-checkbox-group { display: flex; flex-wrap: wrap; gap: 12px; max-height: 120px; overflow-y: auto; padding: 5px 0; }
+        .column-checkbox-group label { display: flex; align-items: center; gap: 5px; font-size: 11px; cursor: pointer; background: white; padding: 4px 8px; border-radius: 16px; border: 1px solid #ddd; }
+        .column-checkbox-group input { margin: 0; cursor: pointer; }
+        .select-all-btn { font-size: 11px; padding: 2px 8px; background: #e9ecef; border-radius: 12px; cursor: pointer; border: none; }
+        
+        .table-wrapper { overflow-x: auto; flex: 1; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 10px; min-width: 600px; }
+        .data-table th { background: #1e3c72; color: white; padding: 8px 4px; text-align: center; border: 1px solid #2a5298; position: sticky; top: 0; font-weight: 600; font-size: 11px; }
+        .data-table td { padding: 6px 4px; border: 1px solid #e0e0e0; text-align: center; vertical-align: middle; }
+        .data-table tr:hover { background: #f8f9fa; }
+        .station-name { font-weight: bold; text-align: left; background: #f5f7fa; }
+        .number-cell { font-weight: 500; color: #2a5298; }
+        .total-row { background: #e8f4f8; font-weight: bold; }
+        .serial-col { width: 40px; text-align: center; background: #f5f7fa; }
+        .hidden-column { display: none; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <div class="logo">🏢 铁路客服设备设施统计系统</div>
+        <div class="nav-menu">
+            <div class="nav-item">菜单</div><div class="nav-item">客运设备信息管理</div><div class="nav-item">统计分析</div>
+            <div class="nav-item">客运设备改造管理</div><div class="nav-item">设备改造统计分析</div><div class="nav-item">客运站情况统计</div>
+            <div class="nav-item">客运站商务候车室管理</div>
+            <div class="nav-item active">客运站商务候车室统计</div>
+        </div>
+    </div>
+    
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header"><h3>🏢 组织机构</h3></div>
+            <div class="tree-container" id="treeContainer"></div>
+        </div>
+        
+        <div class="main-content">
+            <div class="content-header">
+                <h2>客运站商务候车室统计</h2>
+                <p>当前选中：<span id="currentPathDisplay">国铁集团 (全部车站)</span></p>
+            </div>
+            
+            <div class="filter-section">
+                <div class="filter-title">🔍 筛选条件</div>
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label>车站等级</label>
+                        <select id="filterLevel">
+                            <option value="">全部</option>
+                            <option value="特等站">特等站</option>
+                            <option value="一等站">一等站</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label>候车室类型</label>
+                        <select id="filterRoomType">
+                            <option value="all">全部类型</option>
+                            <option value="business">商务候车室</option>
+                            <option value="businessSeat">商务座候车区</option>
+                            <option value="commercial">商业候车室</option>
+                        </select>
+                    </div>
+                    <div class="filter-actions">
+                        <button class="btn btn-primary" onclick="applyFilters()">查询</button>
+                        <button class="btn btn-reset" onclick="resetFilters()">重置</button>
+                        <button class="btn btn-export" onclick="exportToExcel()">导出Excel</button>
+                    </div>
+                </div>
+                
+                <!-- 动态列筛选面板：显示所有14个小列选项 -->
+                <div class="column-filter-panel" id="columnFilterPanel">
+                    <div class="column-filter-title">
+                        📊 显示列筛选 (勾选需要在表格中展示的指标列)
+                        <button class="select-all-btn" onclick="toggleAllColumns(true)">全选</button>
+                        <button class="select-all-btn" onclick="toggleAllColumns(false)">全不选</button>
+                    </div>
+                    <div class="column-checkbox-group" id="columnCheckboxGroup"></div>
+                </div>
+            </div>
+            
+            <div class="table-wrapper">
+                <table class="data-table" id="statTable">
+                    <thead id="tableHeader"></thead>
+                    <tbody id="tableBody"></tbody>
+                    <tfoot id="tableFoot"></tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // ======================== 组织机构树 ========================
+    const orgTree = {
+        "国铁集团": {
+            "北京局": {
+                "北京车务段": ["北京西站", "北京南站", "北京站", "北京北站"],
+                "石家庄车务段": ["石家庄站"],
+                "天津车务段": ["天津站"]
+            },
+            "上海局": {
+                "上海车务段": ["上海虹桥站"],
+                "杭州车务段": ["杭州东站"],
+                "南京车务段": ["南京南站"]
+            },
+            "成都局": {
+                "成都车务段": ["成都东站"],
+                "重庆车务段": ["重庆北站"],
+                "贵阳车务段": ["贵阳北站"]
+            }
+        }
+    };
+    
+    // 定义14个小列的标识和显示名称 (用于动态列筛选)
+    const columnDefs = [
+        { key: "count", label: "数量" },
+        { key: "area", label: "面积(m²)" },
+        { key: "hasToilet", label: "有卫生间" },
+        { key: "noToilet", label: "无卫生间" },
+        { key: "hasEnter", label: "有进站通道" },
+        { key: "noEnter", label: "无进站通道" },
+        { key: "hasWifi", label: "有WiFi" },
+        { key: "noWifi", label: "无WiFi" },
+        { key: "service", label: "服务人员" },
+        { key: "open", label: "开放区" },
+        { key: "large", label: "大型厅" },
+        { key: "medium", label: "中型厅" },
+        { key: "small", label: "小型厅" },
+        { key: "meeting", label: "会议室" }
+    ];
+    
+    // 默认所有列都显示
+    let visibleColumns = columnDefs.map(c => c.key);
+    
+    // 车站等级映射
+    function getLevelDisplay(level) {
+        if (level === "特等站") return "一级";
+        if (level === "一等站") return "二级";
+        if (level === "二等站") return "三级";
+        if (level === "三等站") return "四级";
+        return level || "-";
+    }
+    
+    // ======================== 车站详细数据 ========================
+    const stationData = {
+        "北京西站": { railway:"北京局", section:"北京车务段", level:"特等站",
+            business: { count:3, area:150, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 },
+            businessSeat: { count:4, area:200, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 },
+            commercial: { count:3, area:120, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 } },
+        "北京南站": { railway:"北京局", section:"北京车务段", level:"特等站",
+            business: { count:2, area:120, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:1, medium:1, small:1, meeting:1 },
+            businessSeat: { count:2, area:180, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:1, medium:1, small:1, meeting:1 },
+            commercial: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:1, medium:1, small:1, meeting:1 } },
+        "北京站": { railway:"北京局", section:"北京车务段", level:"特等站",
+            business: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:0, meeting:1 },
+            businessSeat: { count:2, area:160, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:0, meeting:1 },
+            commercial: { count:1, area:80, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:0, meeting:1 } },
+        "北京北站": { railway:"北京局", section:"北京车务段", level:"一等站",
+            business: { count:1, area:80, toilet:"有", enter:"有", wifi:"有", service:8, open:1, large:1, medium:0, small:1, meeting:0 },
+            businessSeat: { count:1, area:120, toilet:"有", enter:"有", wifi:"有", service:8, open:1, large:1, medium:0, small:1, meeting:0 },
+            commercial: { count:1, area:60, toilet:"有", enter:"有", wifi:"有", service:8, open:1, large:1, medium:0, small:1, meeting:0 } },
+        "石家庄站": { railway:"北京局", section:"石家庄车务段", level:"特等站",
+            business: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 },
+            businessSeat: { count:2, area:160, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 },
+            commercial: { count:2, area:90, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 } },
+        "天津站": { railway:"北京局", section:"天津车务段", level:"特等站",
+            business: { count:2, area:120, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:2, medium:1, small:1, meeting:1 },
+            businessSeat: { count:3, area:180, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:2, medium:1, small:1, meeting:1 },
+            commercial: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:12, open:2, large:2, medium:1, small:1, meeting:1 } },
+        "上海虹桥站": { railway:"上海局", section:"上海车务段", level:"特等站",
+            business: { count:4, area:200, toilet:"有", enter:"有", wifi:"有", service:20, open:4, large:3, medium:2, small:2, meeting:3 },
+            businessSeat: { count:5, area:250, toilet:"有", enter:"有", wifi:"有", service:20, open:4, large:3, medium:2, small:2, meeting:3 },
+            commercial: { count:4, area:150, toilet:"有", enter:"有", wifi:"有", service:20, open:4, large:3, medium:2, small:2, meeting:3 } },
+        "杭州东站": { railway:"上海局", section:"杭州车务段", level:"特等站",
+            business: { count:3, area:150, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 },
+            businessSeat: { count:4, area:200, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 },
+            commercial: { count:3, area:120, toilet:"有", enter:"有", wifi:"有", service:15, open:3, large:2, medium:2, small:1, meeting:2 } },
+        "南京南站": { railway:"上海局", section:"南京车务段", level:"特等站",
+            business: { count:3, area:140, toilet:"有", enter:"有", wifi:"有", service:16, open:3, large:2, medium:2, small:1, meeting:2 },
+            businessSeat: { count:4, area:190, toilet:"有", enter:"有", wifi:"有", service:16, open:3, large:2, medium:2, small:1, meeting:2 },
+            commercial: { count:3, area:110, toilet:"有", enter:"有", wifi:"有", service:16, open:3, large:2, medium:2, small:1, meeting:2 } },
+        "成都东站": { railway:"成都局", section:"成都车务段", level:"特等站",
+            business: { count:3, area:150, toilet:"有", enter:"有", wifi:"有", service:10, open:3, large:2, medium:2, small:1, meeting:2 },
+            businessSeat: { count:4, area:200, toilet:"有", enter:"有", wifi:"有", service:10, open:3, large:2, medium:2, small:1, meeting:2 },
+            commercial: { count:3, area:120, toilet:"有", enter:"有", wifi:"有", service:10, open:3, large:2, medium:2, small:1, meeting:2 } },
+        "重庆北站": { railway:"成都局", section:"重庆车务段", level:"特等站",
+            business: { count:3, area:140, toilet:"有", enter:"有", wifi:"有", service:14, open:3, large:2, medium:1, small:1, meeting:2 },
+            businessSeat: { count:4, area:190, toilet:"有", enter:"有", wifi:"有", service:14, open:3, large:2, medium:1, small:1, meeting:2 },
+            commercial: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:14, open:3, large:2, medium:1, small:1, meeting:2 } },
+        "贵阳北站": { railway:"成都局", section:"贵阳车务段", level:"特等站",
+            business: { count:2, area:100, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 },
+            businessSeat: { count:2, area:150, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 },
+            commercial: { count:2, area:80, toilet:"有", enter:"有", wifi:"有", service:10, open:2, large:1, medium:1, small:1, meeting:1 } }
+    };
+    
+    // 全局状态
+    let currentStationsList = [];
+    let filteredStations = [];
+    let currentRoomType = "all";
+    
+    // 初始化列筛选面板
+    function initColumnFilterPanel() {
+        const container = document.getElementById('columnCheckboxGroup');
+        container.innerHTML = '';
+        columnDefs.forEach(col => {
+            const label = document.createElement('label');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.value = col.key;
+            cb.checked = visibleColumns.includes(col.key);
+            cb.onchange = (e) => {
+                if (e.target.checked) {
+                    if (!visibleColumns.includes(col.key)) visibleColumns.push(col.key);
+                } else {
+                    visibleColumns = visibleColumns.filter(k => k !== col.key);
+                }
+                renderTable();  // 重新渲染表格
+            };
+            label.appendChild(cb);
+            label.appendChild(document.createTextNode(col.label));
+            container.appendChild(label);
+        });
+    }
+    
+    function toggleAllColumns(selectAll) {
+        visibleColumns = selectAll ? columnDefs.map(c => c.key) : [];
+        // 更新复选框状态
+        document.querySelectorAll('#columnCheckboxGroup input[type="checkbox"]').forEach(cb => {
+            cb.checked = selectAll;
+        });
+        renderTable();
+    }
+    
+    // 获取某一候车室数据中指定key的显示值（处理有无逻辑）
+    function getCellValue(roomData, colKey) {
+        if (!roomData) return '-';
+        switch(colKey) {
+            case 'count': return roomData.count;
+            case 'area': return roomData.area;
+            case 'hasToilet': return roomData.toilet === '有' ? 1 : 0;
+            case 'noToilet': return roomData.toilet === '有' ? 0 : 1;
+            case 'hasEnter': return roomData.enter === '有' ? 1 : 0;
+            case 'noEnter': return roomData.enter === '有' ? 0 : 1;
+            case 'hasWifi': return roomData.wifi === '有' ? 1 : 0;
+            case 'noWifi': return roomData.wifi === '有' ? 0 : 1;
+            case 'service': return roomData.service;
+            case 'open': return roomData.open;
+            case 'large': return roomData.large;
+            case 'medium': return roomData.medium;
+            case 'small': return roomData.small;
+            case 'meeting': return roomData.meeting;
+            default: return '-';
+        }
+    }
+    
+    // 动态生成表头（根据选中的候车室类型以及可见列）
+    function renderDynamicHeader() {
+        const thead = document.getElementById('tableHeader');
+        // 固定列：序号，车站名称，路局，站段，车站等级
+        const fixedCols = ['序号', '车站名称', '路局', '站段', '车站等级'];
+        if (currentRoomType === "all") {
+            const types = ['商务候车室', '商务座候车区', '商业候车室'];
+            let headerHtml = '<tr>';
+            // 第一行：固定列 + 每个类型占合并列
+            headerHtml += `<th rowspan="2">序号</th><th rowspan="2">车站名称</th><th rowspan="2">路局</th><th rowspan="2">站段</th><th rowspan="2">车站等级</th>`;
+            for (let type of types) {
+                const visibleCount = visibleColumns.length;
+                if (visibleCount > 0) {
+                    headerHtml += `<th colspan="${visibleCount}">${type}</th>`;
+                } else {
+                    headerHtml += `<th colspan="1">${type}(无列)</th>`;
+                }
+            }
+            headerHtml += `</tr><tr>`;
+            // 第二行：每个类型下列出可见的小列名称
+            for (let i = 0; i < types.length; i++) {
+                for (let colKey of visibleColumns) {
+                    const colDef = columnDefs.find(c => c.key === colKey);
+                    headerHtml += `<th>${colDef ? colDef.label : colKey}</th>`;
+                }
+            }
+            headerHtml += `</tr>`;
+            thead.innerHTML = headerHtml;
+        } else {
+            const typeName = getRoomTypeName(currentRoomType);
+            let headerHtml = '<tr>';
+            headerHtml += `<th>序号</th><th>车站名称</th><th>路局</th><th>站段</th><th>车站等级</th>`;
+            if (visibleColumns.length > 0) {
+                for (let colKey of visibleColumns) {
+                    const colDef = columnDefs.find(c => c.key === colKey);
+                    headerHtml += `<th>${colDef ? colDef.label : colKey}</th>`;
+                }
+            } else {
+                headerHtml += `<th>无显示列</th>`;
+            }
+            headerHtml += `</tr>`;
+            thead.innerHTML = headerHtml;
+        }
+    }
+    
+    function getRoomTypeName(type) {
+        const map = { business: "商务候车室", businessSeat: "商务座候车区", commercial: "商业候车室" };
+        return map[type] || "全部";
+    }
+    
+    // 渲染表格数据
+    function renderTable() {
+        renderDynamicHeader();
+        const tbody = document.getElementById('tableBody');
+        const tfoot = document.getElementById('tableFoot');
+        
+        if (!filteredStations.length) {
+            const visibleCount = visibleColumns.length;
+            let colSpan = 5 + (currentRoomType === "all" ? 3 * Math.max(visibleCount,1) : Math.max(visibleCount,1));
+            tbody.innerHTML = `<tr><td colspan="${colSpan}" style="text-align:center; padding:30px;">暂无数据</td></tr>`;
+            tfoot.innerHTML = '';
+            return;
+        }
+        
+        // 准备总计对象
+        let totals = null;
+        if (currentRoomType === "all") {
+            totals = {
+                business: initTotalObj(),
+                businessSeat: initTotalObj(),
+                commercial: initTotalObj()
+            };
+        } else {
+            totals = initTotalObj();
+        }
+        
+        let html = '';
+        let serialNum = 1;
+        for (let item of filteredStations) {
+            const d = item.data;
+            const levelDisplay = getLevelDisplay(d.level);
+            html += `<tr><td class="serial-col">${serialNum++}</td><td class="station-name">${item.station}</td><td>${d.railway}</td><td>${d.section}</td><td>${levelDisplay}</td>`;
+            
+            if (currentRoomType === "all") {
+                const b = d.business;
+                const bs = d.businessSeat;
+                const c = d.commercial;
+                accumulateTotal(totals.business, b);
+                accumulateTotal(totals.businessSeat, bs);
+                accumulateTotal(totals.commercial, c);
+                
+                for (let roomData of [b, bs, c]) {
+                    for (let colKey of visibleColumns) {
+                        let val = getCellValue(roomData, colKey);
+                        html += `<td class="number-cell">${val}</td>`;
+                    }
+                }
+            } else {
+                const roomData = d[currentRoomType];
+                if (roomData) accumulateTotal(totals, roomData);
+                for (let colKey of visibleColumns) {
+                    let val = roomData ? getCellValue(roomData, colKey) : '-';
+                    html += `<td class="number-cell">${val}</td>`;
+                }
+            }
+            html += `</tr>`;
+        }
+        tbody.innerHTML = html;
+        
+        // 渲染总计行
+        let totalHtml = `<tr class="total-row"><td class="serial-col"><strong>总计</strong></td><td colspan="4"></td>`;
+        if (currentRoomType === "all") {
+            for (let t of [totals.business, totals.businessSeat, totals.commercial]) {
+                for (let colKey of visibleColumns) {
+                    let sumVal = t[colKey] !== undefined ? t[colKey] : 0;
+                    totalHtml += `<td class="number-cell">${sumVal}</td>`;
+                }
+            }
+        } else {
+            for (let colKey of visibleColumns) {
+                let sumVal = totals[colKey] !== undefined ? totals[colKey] : 0;
+                totalHtml += `<td class="number-cell">${sumVal}</td>`;
+            }
+        }
+        totalHtml += `</tr>`;
+        tfoot.innerHTML = totalHtml;
+    }
+    
+    function initTotalObj() {
+        let obj = {};
+        columnDefs.forEach(col => { obj[col.key] = 0; });
+        return obj;
+    }
+    
+    function accumulateTotal(total, data) {
+        if (!data) return;
+        columnDefs.forEach(col => {
+            let val = 0;
+            switch(col.key) {
+                case 'count': val = data.count; break;
+                case 'area': val = data.area; break;
+                case 'hasToilet': val = data.toilet === '有' ? 1 : 0; break;
+                case 'noToilet': val = data.toilet === '有' ? 0 : 1; break;
+                case 'hasEnter': val = data.enter === '有' ? 1 : 0; break;
+                case 'noEnter': val = data.enter === '有' ? 0 : 1; break;
+                case 'hasWifi': val = data.wifi === '有' ? 1 : 0; break;
+                case 'noWifi': val = data.wifi === '有' ? 0 : 1; break;
+                case 'service': val = data.service; break;
+                case 'open': val = data.open; break;
+                case 'large': val = data.large; break;
+                case 'medium': val = data.medium; break;
+                case 'small': val = data.small; break;
+                case 'meeting': val = data.meeting; break;
+                default: val = 0;
+            }
+            total[col.key] += val;
+        });
+    }
+    
+    // 筛选逻辑
+    function applyFilters() {
+        const level = document.getElementById('filterLevel').value;
+        const roomType = document.getElementById('filterRoomType').value;
+        currentRoomType = roomType;
+        
+        let filtered = [];
+        for (let s of currentStationsList) {
+            const d = stationData[s.station];
+            if (!d) continue;
+            if (level && d.level !== level) continue;
+            filtered.push({ ...s, data: d });
+        }
+        filteredStations = filtered;
+        renderTable();
+        updatePathDisplay();
+    }
+    
+    function resetFilters() {
+        document.getElementById('filterLevel').value = '';
+        document.getElementById('filterRoomType').value = 'all';
+        currentRoomType = 'all';
+        // 重置可见列为全选
+        visibleColumns = columnDefs.map(c => c.key);
+        initColumnFilterPanel();
+        applyFilters();
+    }
+    
+    function updatePathDisplay() {
+        if (currentStationsList.length === 0) document.getElementById('currentPathDisplay').innerText = '国铁集团 (无车站)';
+        else if (currentStationsList.length === Object.keys(stationData).length) document.getElementById('currentPathDisplay').innerText = '国铁集团 (全部车站)';
+        else document.getElementById('currentPathDisplay').innerText = `已选 ${currentStationsList.length} 个车站`;
+    }
+    
+    // 组织机构树
+    function renderTree() {
+        const container = document.getElementById('treeContainer');
+        container.innerHTML = '';
+        const allNode = document.createElement('div');
+        allNode.className = 'tree-node';
+        allNode.innerHTML = `<div class="tree-node-header" onclick="selectAllStations()"><span class="tree-icon">🏢</span><span class="node-name">📌 全部车站</span></div>`;
+        container.appendChild(allNode);
+        for (let railway in orgTree) {
+            const railwayDiv = document.createElement('div');
+            railwayDiv.className = 'tree-node';
+            railwayDiv.innerHTML = `<div class="tree-node-header" onclick="toggleNode(this)"><span class="tree-icon">🏢</span><span class="node-name">${railway}</span></div>`;
+            const railwayChildren = document.createElement('div'); railwayChildren.className = 'tree-children';
+            for (let bureau in orgTree[railway]) {
+                const bureauDiv = document.createElement('div'); bureauDiv.className = 'tree-node';
+                bureauDiv.innerHTML = `<div class="tree-node-header" onclick="toggleNode(this)"><span class="tree-icon">🏛️</span><span class="node-name">${bureau}</span></div>`;
+                const bureauChildren = document.createElement('div'); bureauChildren.className = 'tree-children';
+                for (let section in orgTree[railway][bureau]) {
+                    const sectionDiv = document.createElement('div'); sectionDiv.className = 'tree-node';
+                    sectionDiv.innerHTML = `<div class="tree-node-header" onclick="toggleNode(this)"><span class="tree-icon">📁</span><span class="node-name">${section}</span></div>`;
+                    const sectionChildren = document.createElement('div'); sectionChildren.className = 'tree-children';
+                    for (let station of orgTree[railway][bureau][section]) {
+                        if (!stationData[station]) continue;
+                        const stationDiv = document.createElement('div'); stationDiv.className = 'tree-node';
+                        stationDiv.innerHTML = `<div class="tree-node-header" onclick="selectStationNode('${railway}','${bureau}','${section}','${station}')"><span class="tree-icon">🚉</span><span class="node-name">${station}</span></div>`;
+                        sectionChildren.appendChild(stationDiv);
+                    }
+                    sectionDiv.appendChild(sectionChildren);
+                    bureauChildren.appendChild(sectionDiv);
+                }
+                bureauDiv.appendChild(bureauChildren);
+                railwayChildren.appendChild(bureauDiv);
+            }
+            railwayDiv.appendChild(railwayChildren);
+            container.appendChild(railwayDiv);
+        }
+    }
+    
+    function selectStationNode(railway, bureau, section, station) {
+        currentStationsList = [{ railway, bureau, section, station }];
+        applyFilters();
+        document.querySelectorAll('.tree-node-header').forEach(el => el.classList.remove('selected'));
+        if (event && event.currentTarget) event.currentTarget.classList.add('selected');
+    }
+    
+    function selectAllStations() {
+        currentStationsList = [];
+        for (let railway in orgTree) {
+            for (let bureau in orgTree[railway]) {
+                for (let section in orgTree[railway][bureau]) {
+                    for (let station of orgTree[railway][bureau][section]) {
+                        if (stationData[station]) currentStationsList.push({ railway, bureau, section, station });
+                    }
+                }
+            }
+        }
+        applyFilters();
+        document.querySelectorAll('.tree-node-header').forEach(el => el.classList.remove('selected'));
+    }
+    
+    function toggleNode(header) {
+        const children = header.parentElement.querySelector('.tree-children');
+        if (children) children.classList.toggle('open');
+    }
+    
+    // 导出Excel（基于当前可见列和筛选数据）
+    function exportToExcel() {
+        if (!filteredStations.length) { alert("无数据可导出"); return; }
+        let csvRows = [];
+        let headers = ["序号", "车站名称", "路局", "站段", "车站等级"];
+        if (currentRoomType === "all") {
+            const types = ["商务候车室", "商务座候车区", "商业候车室"];
+            for (let type of types) {
+                for (let colKey of visibleColumns) {
+                    let colDef = columnDefs.find(c => c.key === colKey);
+                    headers.push(`${type}_${colDef ? colDef.label : colKey}`);
+                }
+            }
+        } else {
+            let typeName = getRoomTypeName(currentRoomType);
+            for (let colKey of visibleColumns) {
+                let colDef = columnDefs.find(c => c.key === colKey);
+                headers.push(`${typeName}_${colDef ? colDef.label : colKey}`);
+            }
+        }
+        csvRows.push(headers.join(","));
+        let serial = 1;
+        for (let item of filteredStations) {
+            const d = item.data;
+            let row = [serial++, item.station, d.railway, d.section, getLevelDisplay(d.level)];
+            if (currentRoomType === "all") {
+                for (let room of [d.business, d.businessSeat, d.commercial]) {
+                    for (let colKey of visibleColumns) {
+                        row.push(getCellValue(room, colKey));
+                    }
+                }
+            } else {
+                let room = d[currentRoomType];
+                for (let colKey of visibleColumns) {
+                    row.push(room ? getCellValue(room, colKey) : '-');
+                }
+            }
+            csvRows.push(row.map(cell => `"${cell}"`).join(","));
+        }
+        const blob = new Blob(["\uFEFF" + csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.setAttribute("download", "商务候车室统计报表.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+    
+    // 初始化
+    initColumnFilterPanel();
+    renderTree();
+    selectAllStations();
+</script>
+</body>
+</html>
