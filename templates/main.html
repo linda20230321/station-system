@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>客运站商务候车室管理系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f0f2f5; }
+        
+        .navbar { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+        .logo { font-size: 18px; font-weight: bold; padding: 15px 0; }
+        .nav-menu { display: flex; flex-wrap: wrap; gap: 5px; }
+        .nav-item { padding: 15px 12px; cursor: pointer; font-size: 13px; transition: all 0.2s; border-bottom: 2px solid transparent; }
+        .nav-item:hover { background: rgba(255,255,255,0.1); border-bottom-color: #ffc107; }
+        .nav-item.active { border-bottom-color: #ffc107; background: rgba(255,255,255,0.1); }
+        
+        .app-container { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+        
+        .sidebar { width: 280px; background: white; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar-header { background: #f8f9fa; padding: 12px 15px; border-bottom: 1px solid #e0e0e0; }
+        .sidebar-header h3 { font-size: 14px; color: #1e3c72; }
+        
+        .tree-container { flex: 1; overflow-y: auto; padding: 10px; }
+        
+        .tree-node { user-select: none; margin: 1px 0; }
+        .tree-node-header { display: flex; align-items: center; padding: 6px 5px; cursor: pointer; border-radius: 5px; transition: all 0.2s; font-size: 12px; }
+        .tree-node-header:hover { background: #e8f4f8; }
+        .tree-node-header.selected { background: #2a5298; color: white; }
+        .tree-node-header.selected .node-name { color: white; }
+        .tree-icon { width: 18px; font-size: 12px; margin-right: 4px; }
+        .node-name { font-size: 12px; flex: 1; }
+        .node-count { font-size: 10px; color: #999; margin-left: 5px; }
+        .tree-node-header.selected .node-count { color: rgba(255,255,255,0.7); }
+        .tree-children { margin-left: 18px; display: none; }
+        .tree-children.open { display: block; }
+        
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 15px; }
+        
+        .content-header { margin-bottom: 15px; }
+        .content-header h2 { font-size: 18px; color: #1e3c72; }
+        
+        .action-bar { display: flex; justify-content: flex-end; margin-bottom: 12px; gap: 8px; }
+        .btn { padding: 5px 12px; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .btn-primary { background: #2a5298; color: white; }
+        .btn-primary:hover { background: #1e3c72; }
+        .btn-export { background: #28a745; color: white; }
+        .btn-export:hover { background: #218838; }
+        .btn-warning { background: #ffc107; color: #333; }
+        .btn-warning:hover { background: #e0a800; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-danger:hover { background: #c82333; }
+        .btn-info { background: #17a2b8; color: white; }
+        .btn-info:hover { background: #138496; }
+        .btn-sm { padding: 3px 8px; font-size: 10px; }
+        
+        .result-info { background: #e3f2fd; padding: 6px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; }
+        
+        .table-wrapper { overflow-x: auto; flex: 1; background: white; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 11px; min-width: 1800px; }
+        .data-table th { background: #1e3c72; color: white; padding: 8px 5px; text-align: center; border: 1px solid #2a5298; position: sticky; top: 0; font-weight: 600; font-size: 11px; }
+        .data-table td { padding: 6px 5px; border: 1px solid #e0e0e0; text-align: center; vertical-align: middle; }
+        .data-table tr:hover { background: #f8f9fa; }
+        
+        .facility-cell { cursor: pointer; background: #f0f7ff; font-weight: bold; color: #2a5298; transition: all 0.2s; }
+        .facility-cell:hover { background: #2a5298; color: white; }
+        .facility-number { font-size: 14px; font-weight: bold; }
+        
+        .sub-table-container { display: none; background: #fafafa; }
+        .sub-table { width: 100%; border-collapse: collapse; background: #fff; margin: 5px 0; }
+        .sub-table th { background: #e9ecef; color: #333; padding: 5px; font-size: 10px; text-align: left; border: 1px solid #dee2e6; }
+        .sub-table td { padding: 5px; font-size: 10px; border: 1px solid #dee2e6; }
+        
+        .expand-icon { font-size: 10px; margin-left: 3px; }
+        .location-text { max-width: 120px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .btn-group { display: flex; gap: 8px; }
+        .merged-cell { background-color: #f8f9fa; vertical-align: middle; }
+        
+        .context-header { background: #e9ecef; padding: 6px 10px; margin-bottom: 10px; border-radius: 4px; font-size: 11px; display: flex; flex-wrap: wrap; gap: 15px; }
+        .context-item { color: #333; }
+        .context-label { font-weight: bold; color: #2a5298; }
+        
+        .seq-column { width: 40px; background-color: #f8f9fa; font-weight: bold; }
+        
+        /* 等级标签样式 - 改为一级、二级、三级、四级 */
+        .level-tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: bold; }
+        .level-1 { background: #ffd700; color: #333; }
+        .level-2 { background: #c0c0c0; color: #333; }
+        .level-3 { background: #cd7f32; color: white; }
+        .level-4 { background: #8B7355; color: white; }
+        .level-default { background: #6c757d; color: white; }
+    </style>
+</head>
+<body>
+<!-- 导航栏部分 - 使用内联onclick确保跳转正常 -->
+<div class="navbar">
+    <div class="logo">🏢 铁路客服设备设施统计系统</div>
+    <div class="nav-menu">
+       <div class="nav-item" onclick="window.location.href='/refresh'" style="cursor:pointer;">客运站商务候车室管理</div>
+        <a href="/statistics" style="color: white; text-decoration: none; padding: 15px 12px; display: inline-block; font-size: 13px;">客运站商务候车室统计</a>
+    </div>
+</div>
+    
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header"><h3>🏢 组织机构</h3></div>
+            <div class="tree-container" id="treeContainer"><div style="text-align: center; padding: 20px;">加载中...</div></div>
+        </div>
+        
+        <div class="main-content">
+            <div class="content-header">
+                <h2>客运站商务候车室管理</h2>
+                <p>当前选中：<span id="currentPathDisplay">国铁集团</span></p>
+            </div>
+            
+            <div class="action-bar">
+                <div class="btn-group">
+                    <button class="btn btn-info" onclick="expandAllRows()">📂 展开所有设施详情</button>
+                    <button class="btn btn-info" onclick="collapseAllRows()">📁 收起所有设施详情</button>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-export" onclick="exportToExcel()">📊 导出Excel报表</button>
+                </div>
+            </div>
+            
+            <div class="result-info">📊 共找到 <strong id="resultCount">0</strong> 个车站</div>
+            
+            <div class="table-wrapper">
+                <table class="data-table" id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>序号</th>
+                            <th>车站名称</th>
+                            <th>所属站段</th>
+                            <th>所属路局</th>
+                            <th>车站位置</th>
+                            <th>车站等级</th>
+                            <th>候车室类型</th>
+                            <th>类型数量</th>
+                            <th>候车室名称</th>
+                            <th>进站通道</th>
+                            <th>出站通道</th>
+                            <th>WiFi</th>
+                            <th>营业时间</th>
+                            <th>服务人员</th>
+                            <th>联系电话</th>
+                            <th>独立停车区</th>
+                            <th>停车位数</th>
+                            <th>提醒时间</th>
+                            <th>建设情况</th>
+                            <th>出资情况</th>
+                            <th>资金来源</th>
+                            <th>建设单位</th>
+                            <th>开放区</th>
+                            <th>大型厅</th>
+                            <th>中型厅</th>
+                            <th>小型厅</th>
+                            <th>会议室</th>
+                            <th>操作</th>
+                            <th>设施详情</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody"><td><td colspan="30" style="text-align: center;">请从左侧选择车站<\/td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+<script>
+    let treeData = {};
+    let currentSelectedNode = null;
+    let currentSelectedType = 'railway';
+    let currentSelectedName = '国铁集团';
+    let currentSelectedPath = [];
+    
+    // 等级映射函数 - 将特等站/一等站映射为一级/二级
+    function getLevelDisplay(level) {
+        if (level === '特等站') return '<span class="level-tag level-1">一级</span>';
+        if (level === '一等站') return '<span class="level-tag level-2">二级</span>';
+        if (level === '二等站') return '<span class="level-tag level-3">三级</span>';
+        if (level === '三等站') return '<span class="level-tag level-4">四级</span>';
+        if (level === '一级') return '<span class="level-tag level-1">一级</span>';
+        if (level === '二级') return '<span class="level-tag level-2">二级</span>';
+        if (level === '三级') return '<span class="level-tag level-3">三级</span>';
+        if (level === '四级') return '<span class="level-tag level-4">四级</span>';
+        return '<span class="level-tag level-default">' + (level || '-') + '</span>';
+    }
+    
+    async function loadTreeData() {
+        const response = await fetch('/api/get_tree_data');
+        treeData = await response.json();
+        renderTree();
+        selectNode('railway', '国铁集团', ['国铁集团']);
+    }
+    
+    function renderTree() {
+        const container = document.getElementById('treeContainer');
+        container.innerHTML = '';
+        for (let railway in treeData) {
+            const railwayNode = createTreeNode(railway, '🏢', 'railway', getStationCount(railway, null, null));
+            const railwayChildren = document.createElement('div');
+            railwayChildren.className = 'tree-children';
+            for (let bureau in treeData[railway]) {
+                const bureauNode = createTreeNode(bureau, '🏛️', 'bureau', getStationCount(railway, bureau, null));
+                const bureauChildren = document.createElement('div');
+                bureauChildren.className = 'tree-children';
+                for (let section in treeData[railway][bureau]) {
+                    const sectionNode = createTreeNode(section, '📁', 'section', getStationCount(railway, bureau, section));
+                    const sectionChildren = document.createElement('div');
+                    sectionChildren.className = 'tree-children';
+                    for (let station in treeData[railway][bureau][section]) {
+                        const stationNode = createTreeNode(station, '🚉', 'station', 0);
+                        stationNode.onclick = (function(r, b, s, st) {
+                            return function(e) {
+                                e.stopPropagation();
+                                selectNode('station', st, [r, b, s, st]);
+                            };
+                        })(railway, bureau, section, station);
+                        sectionChildren.appendChild(stationNode);
+                    }
+                    sectionNode.appendChild(sectionChildren);
+                    sectionNode.onclick = (function(r, b, s) {
+                        return function(e) {
+                            e.stopPropagation();
+                            toggleTreeNodeChildren(sectionNode);
+                            selectNode('section', s, [r, b, s]);
+                        };
+                    })(railway, bureau, section);
+                    bureauChildren.appendChild(sectionNode);
+                }
+                bureauNode.appendChild(bureauChildren);
+                bureauNode.onclick = (function(r, b) {
+                    return function(e) {
+                        e.stopPropagation();
+                        toggleTreeNodeChildren(bureauNode);
+                        selectNode('bureau', b, [r, b]);
+                    };
+                })(railway, bureau);
+                railwayChildren.appendChild(bureauNode);
+            }
+            railwayNode.appendChild(railwayChildren);
+            railwayNode.onclick = (function(r) {
+                return function(e) {
+                    e.stopPropagation();
+                    toggleTreeNodeChildren(railwayNode);
+                    selectNode('railway', r, [r]);
+                };
+            })(railway);
+            container.appendChild(railwayNode);
+        }
+        const firstRailway = container.querySelector('.tree-node');
+        if (firstRailway) {
+            const children = firstRailway.querySelector('.tree-children');
+            if (children) children.classList.add('open');
+        }
+    }
+    
+    function toggleTreeNodeChildren(node) {
+        const children = node.querySelector('.tree-children');
+        if (children) children.classList.toggle('open');
+    }
+    
+    function getStationCount(railway, bureau, section) {
+        let count = 0;
+        if (bureau === null) {
+            for (let b in treeData[railway]) {
+                for (let s in treeData[railway][b]) {
+                    count += Object.keys(treeData[railway][b][s]).length;
+                }
+            }
+        } else if (section === null) {
+            for (let s in treeData[railway][bureau]) {
+                count += Object.keys(treeData[railway][bureau][s]).length;
+            }
+        } else {
+            count = Object.keys(treeData[railway][bureau][section]).length;
+        }
+        return count;
+    }
+    
+    function createTreeNode(name, icon, type, count) {
+        const div = document.createElement('div');
+        div.className = 'tree-node';
+        div.innerHTML = `<div class="tree-node-header" data-type="${type}" data-name="${name}">
+            <span class="tree-icon">${icon}</span>
+            <span class="node-name">${name}</span>
+            ${count > 0 ? `<span class="node-count">(${count})</span>` : ''}
+        </div>`;
+        return div;
+    }
+    
+    function selectNode(type, name, path) {
+        if (currentSelectedNode) currentSelectedNode.classList.remove('selected');
+        const treeNodes = document.querySelectorAll('.tree-node-header');
+        for (let node of treeNodes) {
+            if (node.querySelector('.node-name')?.innerText === name) {
+                node.classList.add('selected');
+                currentSelectedNode = node;
+                break;
+            }
+        }
+        currentSelectedType = type;
+        currentSelectedName = name;
+        currentSelectedPath = path;
+        document.getElementById('currentPathDisplay').innerHTML = path.join(' / ');
+        loadStationsByPath(path, type);
+    }
+    
+    async function loadStationsByPath(path, type) {
+        let stations = [];
+        if (type === 'railway') {
+            const railway = path[0];
+            for (let bureau in treeData[railway]) {
+                for (let section in treeData[railway][bureau]) {
+                    for (let station in treeData[railway][bureau][section]) {
+                        stations.push({ railway, bureau, section, station });
+                    }
+                }
+            }
+        } else if (type === 'bureau') {
+            const railway = path[0];
+            const bureau = path[1];
+            for (let section in treeData[railway][bureau]) {
+                for (let station in treeData[railway][bureau][section]) {
+                    stations.push({ railway, bureau, section, station });
+                }
+            }
+        } else if (type === 'section') {
+            const railway = path[0];
+            const bureau = path[1];
+            const section = path[2];
+            for (let station in treeData[railway][bureau][section]) {
+                stations.push({ railway, bureau, section, station });
+            }
+        } else {
+            stations.push({ railway: path[0], bureau: path[1], section: path[2], station: path[3] });
+        }
+        document.getElementById('resultCount').innerText = stations.length;
+        await renderTable(stations);
+    }
+    
+    async function renderTable(stations) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '<tr><td colspan="30" style="text-align: center;">加载中...<\/td></tr>';
+        let allRows = '';
+        let seqNum = 1;
+        
+        for (let s of stations) {
+            try {
+                const response = await fetch(`/api/get_station_data?railway=${encodeURIComponent(s.railway)}&bureau=${encodeURIComponent(s.bureau)}&section=${encodeURIComponent(s.section)}&station=${encodeURIComponent(s.station)}`);
+                const data = await response.json();
+                const basic = data.basic_info || {};
+                
+                const locationParts = [];
+                if (basic.省) locationParts.push(basic.省);
+                if (basic.市) locationParts.push(basic.市);
+                if (basic.区) locationParts.push(basic.区);
+                if (basic.街道) locationParts.push(basic.街道);
+                const locationText = locationParts.join('') || '-';
+                
+                const openAreas = data.open_areas || [];
+                const largeHalls = data.large_halls || [];
+                const mediumHalls = data.medium_halls || [];
+                const smallHalls = data.small_halls || [];
+                const meetingRooms = data.meeting_rooms || [];
+                
+                // 候车室列表 - 从API获取或使用默认
+                const waitingRooms = data.waiting_rooms || [
+                    { type: "商务候车室", count: 2, name: "商务候车室（南）" },
+                    { type: "商务候车室", count: 2, name: "商务候车室（北）" },
+                    { type: "商务座候车区", count: 2, name: "商务座候车区1" },
+                    { type: "商务座候车区", count: 2, name: "商务座候车区2" },
+                    { type: "商业候车室", count: 1, name: "商业候车室" }
+                ];
+                
+                // 按类型分组
+                const typeGroups = {};
+                for (let wr of waitingRooms) {
+                    if (!typeGroups[wr.type]) typeGroups[wr.type] = { count: wr.count, rows: [] };
+                    typeGroups[wr.type].rows.push(wr);
+                }
+                
+                const rowId = `row_${s.railway}_${s.bureau}_${s.section}_${s.station}`.replace(/\s/g, '_');
+                let currentRowIndex = 0;
+                const totalRows = waitingRooms.length;
+                const currentSeq = seqNum;
+                seqNum++;
+                
+                const rowBasicInfo = [];
+                
+                for (let typeName in typeGroups) {
+                    const group = typeGroups[typeName];
+                    const typeRowspan = group.rows.length;
+                    let isFirstInType = true;
+                    
+                    for (let wr of group.rows) {
+                        const rowInfo = {
+                            stationType: wr.type,
+                            roomName: wr.name
+                        };
+                        rowBasicInfo.push(rowInfo);
+                        
+                        const levelDisplay = getLevelDisplay(basic.车站等级 || '');
+                        
+                        allRows += `
+                            <tr class="main-row" id="${rowId}_${currentRowIndex}" data-roomtype="${wr.type}" data-roomname="${wr.name}">
+                                ${currentRowIndex === 0 ? `
+                                    <td rowspan="${totalRows}" class="merged-cell seq-column"><strong>${currentSeq}</strong><\/td>
+                                    <td rowspan="${totalRows}" class="merged-cell"><strong>${s.station}</strong><\/td>
+                                    <td rowspan="${totalRows}" class="merged-cell">${s.section}<\/td>
+                                    <td rowspan="${totalRows}" class="merged-cell">${s.bureau}<\/td>
+                                    <td rowspan="${totalRows}" class="merged-cell location-text" title="${locationText}">${locationText}<\/td>
+                                    <td rowspan="${totalRows}" class="merged-cell">${levelDisplay}<\/td>
+                                ` : ''}
+                                ${isFirstInType ? `<td rowspan="${typeRowspan}" class="merged-cell">${wr.type}<\/td><td rowspan="${typeRowspan}" class="merged-cell">${wr.count}<\/td>` : ''}
+                                <td>${wr.name}<\/td>
+                                <td>${basic.专用进站通道 || '有'}<\/td>
+                                <td>${basic.专用出站通道 || '有'}<\/td>
+                                <td>${basic.有wifi || '有'}<\/td>
+                                <td>${basic.营业时间_开始 || '06:00'}-${basic.营业时间_结束 || '22:00'}<\/td>
+                                <td>${basic.服务人员数量 || 12}<\/td>
+                                <td>${basic.联系电话_座机 || '010-67561234'}<\/td>
+                                <td>${basic.独立停车区 || '有'}<\/td>
+                                <td>${basic.停车位数量 || 50}<\/td>
+                                <td>${basic.登车提醒时间 || 15}分钟<\/td>
+                                <td>${basic.建设情况 || '已建成'}<\/td>
+                                <td>${basic.出资情况 || '路局出资'}<\/td>
+                                <td>${basic.资金来源 || '专项资金'}<\/td>
+                                <td>${basic.建设单位 || '北京铁路建设集团'}<\/td>
+                                <td class="facility-cell" onclick="toggleFacilityDetail('${rowId}', 'open', ${openAreas.length}, ${currentRowIndex})">
+                                    <span class="facility-number">${openAreas.length}</span>${openAreas.length > 0 ? '<span class="expand-icon">▼</span>' : ''}
+                                <\/td>
+                                <td class="facility-cell" onclick="toggleFacilityDetail('${rowId}', 'large', ${largeHalls.length}, ${currentRowIndex})">
+                                    <span class="facility-number">${largeHalls.length}</span>${largeHalls.length > 0 ? '<span class="expand-icon">▼</span>' : ''}
+                                <\/td>
+                                <td class="facility-cell" onclick="toggleFacilityDetail('${rowId}', 'medium', ${mediumHalls.length}, ${currentRowIndex})">
+                                    <span class="facility-number">${mediumHalls.length}</span>${mediumHalls.length > 0 ? '<span class="expand-icon">▼</span>' : ''}
+                                <\/td>
+                                <td class="facility-cell" onclick="toggleFacilityDetail('${rowId}', 'small', ${smallHalls.length}, ${currentRowIndex})">
+                                    <span class="facility-number">${smallHalls.length}</span>${smallHalls.length > 0 ? '<span class="expand-icon">▼</span>' : ''}
+                                <\/td>
+                                <td class="facility-cell" onclick="toggleFacilityDetail('${rowId}', 'meeting', ${meetingRooms.length}, ${currentRowIndex})">
+                                    <span class="facility-number">${meetingRooms.length}</span>${meetingRooms.length > 0 ? '<span class="expand-icon">▼</span>' : ''}
+                                <\/td>
+                                <td><button class="btn btn-warning btn-sm" onclick="editStation('${s.railway}', '${s.bureau}', '${s.section}', '${s.station}')">编辑<\/button><\/td>
+                                <td><button class="btn btn-info btn-sm" onclick="toggleRowFacilities('${rowId}', ${openAreas.length}, ${largeHalls.length}, ${mediumHalls.length}, ${smallHalls.length}, ${meetingRooms.length})">📂 展开/收起<\/button><\/td>
+                            </tr>
+                        `;
+                        currentRowIndex++;
+                        isFirstInType = false;
+                    }
+                }
+                
+                window.rowBasicInfoMap = window.rowBasicInfoMap || {};
+                window.rowBasicInfoMap[rowId] = rowBasicInfo;
+                
+                allRows += renderSubTable(rowId, 'open', openAreas, '开放休息区', s.railway, s.bureau, s.section, s.station, 'price', '元/人/次', true);
+                allRows += renderSubTable(rowId, 'large', largeHalls, '大型休息厅', s.railway, s.bureau, s.section, s.station, 'price_per_hour', '元/小时', true);
+                allRows += renderSubTable(rowId, 'medium', mediumHalls, '中型休息厅', s.railway, s.bureau, s.section, s.station, 'price_per_hour', '元/小时', true);
+                allRows += renderSubTable(rowId, 'small', smallHalls, '小型休息厅', s.railway, s.bureau, s.section, s.station, 'price_per_hour', '元/小时', true);
+                allRows += renderSubTable(rowId, 'meeting', meetingRooms, '会议室', s.railway, s.bureau, s.section, s.station, 'price_per_hour', '元/小时', false);
+                
+            } catch(e) { console.error(e); }
+        }
+        
+        if (allRows === '') {
+            tbody.innerHTML = '<tr><td colspan="30" style="text-align: center;">暂无车站数据<\/td></tr>';
+        } else {
+            tbody.innerHTML = allRows;
+        }
+    }
+    
+    function renderSubTable(rowId, type, items, title, railway, bureau, section, station, priceField, priceUnit, hasSofa) {
+        if (!items || items.length === 0) return '';
+        
+        let tableRows = '';
+        items.forEach(item => {
+            tableRows += `<tr>
+                <td colspan="2">${item.name || '-'}<\/td>
+                <td>${item.area || 0}㎡<\/td>
+                <td>${item.has_toilet || '-'}<\/td>
+                <td>${item.has_kitchen || '-'}<\/td>
+                ${hasSofa ? `<td>${item.sofa_count || 0}<\/td>` : ''}
+                <td>${item.seat_count || 0}<\/td>
+                <td>${item[priceField] || 0}${priceUnit}<\/td>
+                <td>${item.position || '-'}<\/td>
+                <td>${item.business_mode || '-'}<\/td>
+                <td>${item.business_subject || '-'}<\/td>
+                <td>${item.fee_standard || '-'}<\/td>
+                <td>${item.contract_end_date || '-'}<\/td>
+                <td>${item.contract_amount || 0}<\/td>
+                <td>${item.has_naming || '-'}<\/td>
+                <td>${item.naming_unit || '-'}<\/td>
+                <td><button class="btn btn-warning btn-sm" onclick="event.stopPropagation(); editFacility('${railway}', '${bureau}', '${section}', '${station}', '${type}', ${item.id})">编辑<\/button>
+                <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteFacility('${railway}', '${bureau}', '${section}', '${station}', '${type}', ${item.id})">删除<\/button><\/td>
+             <\/tr>`;
+        });
+        
+        const headers = `<th>名称</th><th>面积</th><th>卫生间</th><th>操作间</th>${hasSofa ? '<th>沙发数</th>' : ''}<th>座位数</th><th>价格</th><th>位置</th><th>经营模式</th><th>经营主体</th><th>收费标准</th><th>合同到期</th><th>合同金额</th><th>有冠名</th><th>冠名单位</th><th>操作</th>`;
+        
+        return `<tr class="sub-table-container" id="${rowId}_${type}_sub" style="display: none;">
+            <td colspan="30" style="padding: 10px; background: #fafafa;">
+                <div id="${rowId}_${type}_context" class="context-header"></div>
+                <div style="font-weight: bold; margin-bottom: 8px; color: #2a5298;">📌 ${title}（共${items.length}个）</div>
+                <div style="overflow-x: auto;"><table class="sub-table" style="min-width: 1400px;"><thead><tr>${headers}<\/tr><\/thead><tbody>${tableRows}<\/tbody><\/table><\/div>
+            <\/td>
+         <\/tr>`;
+    }
+    
+    function toggleFacilityDetail(rowId, type, count, rowIndex) {
+        if (count === 0) return;
+        const subRow = document.getElementById(`${rowId}_${type}_sub`);
+        if (subRow) {
+            const isExpanded = subRow.style.display === 'table-row';
+            if (!isExpanded) {
+                const contextDiv = document.getElementById(`${rowId}_${type}_context`);
+                if (contextDiv && window.rowBasicInfoMap && window.rowBasicInfoMap[rowId] && window.rowBasicInfoMap[rowId][rowIndex]) {
+                    const info = window.rowBasicInfoMap[rowId][rowIndex];
+                    contextDiv.innerHTML = `
+                        <span class="context-item"><span class="context-label">候车室类型：</span>${info.stationType}</span>
+                        <span class="context-item"><span class="context-label">候车室名称：</span>${info.roomName}</span>
+                    `;
+                }
+            }
+            subRow.style.display = isExpanded ? 'none' : 'table-row';
+        }
+    }
+    
+    function toggleRowFacilities(rowId, openCount, largeCount, mediumCount, smallCount, meetingCount) {
+        const types = [];
+        if (openCount > 0) types.push('open');
+        if (largeCount > 0) types.push('large');
+        if (mediumCount > 0) types.push('medium');
+        if (smallCount > 0) types.push('small');
+        if (meetingCount > 0) types.push('meeting');
+        if (types.length === 0) return;
+        
+        const firstSubRow = document.getElementById(`${rowId}_${types[0]}_sub`);
+        if (!firstSubRow) return;
+        const isExpanded = firstSubRow.style.display === 'table-row';
+        types.forEach(type => {
+            const subRow = document.getElementById(`${rowId}_${type}_sub`);
+            if (subRow) subRow.style.display = isExpanded ? 'none' : 'table-row';
+            if (!isExpanded && window.rowBasicInfoMap && window.rowBasicInfoMap[rowId]) {
+                for (let i = 0; i < window.rowBasicInfoMap[rowId].length; i++) {
+                    const contextDiv = document.getElementById(`${rowId}_${type}_context`);
+                    if (contextDiv) {
+                        const info = window.rowBasicInfoMap[rowId][i];
+                        contextDiv.innerHTML = `
+                            <span class="context-item"><span class="context-label">候车室类型：</span>${info.stationType}</span>
+                            <span class="context-item"><span class="context-label">候车室名称：</span>${info.roomName}</span>
+                        `;
+                    }
+                }
+            }
+        });
+    }
+    
+    function expandAllRows() { document.querySelectorAll('.sub-table-container').forEach(row => row.style.display = 'table-row'); }
+    function collapseAllRows() { document.querySelectorAll('.sub-table-container').forEach(row => row.style.display = 'none'); }
+    
+    function editStation(railway, bureau, section, station) {
+        sessionStorage.setItem('currentPath', JSON.stringify({ railway, bureau, section, station }));
+        window.open(`/edit`, '_blank');
+    }
+    
+    function editFacility(railway, bureau, section, station, type, id) {
+        sessionStorage.setItem('currentPath', JSON.stringify({ railway, bureau, section, station }));
+        window.open(`/edit?type=${type}&id=${id}`, '_blank');
+    }
+    
+    async function deleteFacility(railway, bureau, section, station, type, id) {
+        if (!confirm('确定删除该设施吗？')) return;
+        let url = '';
+        if (type === 'open') url = `/api/delete_open_area/${id}`;
+        else if (type === 'large') url = `/api/delete_large_hall/${id}`;
+        else if (type === 'medium') url = `/api/delete_medium_hall/${id}`;
+        else if (type === 'small') url = `/api/delete_small_hall/${id}`;
+        else if (type === 'meeting') url = `/api/delete_meeting_room/${id}`;
+        await fetch(url, { method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ railway, bureau, section, station }) });
+        loadStationsByPath(currentSelectedPath, currentSelectedType);
+    }
+    
+    function exportToExcel() { window.location.href = '/api/export_all_excel'; }
+    
+    // 页面加载时加载数据
+    loadTreeData();
+</script>
+</body>
+</html>
