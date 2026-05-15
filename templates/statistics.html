@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>客运站商务候车室统计系统 - 动态列筛选</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f0f2f5; }
+        
+        .navbar { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+        .logo { font-size: 18px; font-weight: bold; padding: 15px 0; }
+        .nav-menu { display: flex; flex-wrap: wrap; gap: 5px; }
+        .nav-item { padding: 15px 12px; cursor: pointer; font-size: 13px; transition: all 0.2s; border-bottom: 2px solid transparent; display: inline-block; text-decoration: none; color: white; }
+        .nav-item:hover { background: rgba(255,255,255,0.1); border-bottom-color: #ffc107; }
+        .nav-item.active { border-bottom-color: #ffc107; background: rgba(255,255,255,0.1); }
+        
+        .app-container { display: flex; height: calc(100vh - 52px); overflow: hidden; }
+        
+        .sidebar { width: 280px; background: white; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+        .sidebar-header { background: #f8f9fa; padding: 12px 15px; border-bottom: 1px solid #e0e0e0; }
+        .sidebar-header h3 { font-size: 14px; color: #1e3c72; }
+        
+        .tree-container { flex: 1; overflow-y: auto; padding: 10px; }
+        
+        .tree-node { user-select: none; margin: 1px 0; }
+        .tree-node-header { display: flex; align-items: center; padding: 6px 5px; cursor: pointer; border-radius: 5px; transition: all 0.2s; font-size: 12px; }
+        .tree-node-header:hover { background: #e8f4f8; }
+        .tree-node-header.selected { background: #2a5298; color: white; }
+        .tree-node-header.selected .node-name { color: white; }
+        .tree-icon { width: 20px; font-size: 12px; margin-right: 4px; }
+        .node-name { font-size: 12px; flex: 1; }
+        .node-count { font-size: 10px; color: #999; margin-left: 5px; }
+        .tree-node-header.selected .node-count { color: rgba(255,255,255,0.7); }
+        .tree-children { margin-left: 20px; display: none; }
+        .tree-children.open { display: block; }
+        
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 15px; }
+        
+        .content-header { margin-bottom: 10px; }
+        .content-header h2 { font-size: 18px; color: #1e3c72; }
+        .content-header p { font-size: 12px; color: #666; margin-top: 4px; }
+        
+        .filter-section { background: white; border-radius: 12px; padding: 10px 15px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); max-height: 42%; overflow-y: auto; }
+        .filter-title { font-size: 13px; font-weight: bold; color: #1e3c72; margin: 8px 0 8px 0; padding-bottom: 4px; border-bottom: 2px solid #e0e0e0; }
+        .filter-title:first-of-type { margin-top: 0; }
+        .filter-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
+        .filter-group { display: flex; flex-direction: column; min-width: 150px; }
+        .filter-group label { font-size: 10px; font-weight: 600; margin-bottom: 2px; color: #555; }
+        
+        .multi-select-wrapper { position: relative; min-width: 150px; }
+        .multi-select-trigger { padding: 4px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 11px; background: white; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .multi-select-dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-radius: 6px; z-index: 100; max-height: 220px; overflow-y: auto; margin-top: 2px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); padding: 6px; }
+        .multi-select-dropdown.show { display: block; }
+        .multi-select-dropdown label { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 4px 6px; cursor: pointer; white-space: nowrap; }
+        .multi-select-dropdown label:hover { background: #f0f2f5; }
+        .dropdown-actions { display: flex; gap: 6px; justify-content: flex-end; padding-top: 6px; border-top: 1px solid #eee; margin-top: 4px; }
+        .btn-sm { font-size: 10px; padding: 2px 8px; border-radius: 4px; border: 1px solid #ccc; background: #f8f9fa; cursor: pointer; }
+        .btn-primary-sm { background: #2a5298; color: white; border: none; }
+        
+        .checkbox-group { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 8px 0 12px 0; }
+        .checkbox-group label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; padding: 3px 8px; background: #f0f2f5; border-radius: 16px; }
+        .checkbox-group input { margin: 0; cursor: pointer; }
+        
+        .roomtype-checkbox-group { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 8px 0 12px 0; }
+        .roomtype-checkbox-group label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; padding: 3px 10px; background: #f0f2f5; border-radius: 20px; }
+        
+        .filter-actions { display: flex; gap: 10px; align-items: center; margin: 10px 0 5px; }
+        .btn { padding: 5px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .btn-primary { background: #2a5298; color: white; }
+        .btn-primary:hover { background: #1e3c72; }
+        .btn-reset { background: #6c757d; color: white; }
+        .btn-export { background: #28a745; color: white; }
+        .btn-stats { background: #17a2b8; color: white; }
+        
+        .table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 8px; gap: 10px; }
+        .table-wrapper { overflow-x: auto; flex: 1; background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 10px; min-width: 600px; }
+        .data-table th { background: #1e3c72; color: white; padding: 8px 4px; text-align: center; border: 1px solid #2a5298; position: sticky; top: 0; font-weight: 600; font-size: 11px; }
+        .data-table td { padding: 6px 4px; border: 1px solid #e0e0e0; text-align: center; vertical-align: middle; }
+        .data-table tr:hover { background: #f8f9fa; }
+        .station-name { font-weight: bold; text-align: left; background: #f5f7fa; }
+        .number-cell { font-weight: 500; color: #2a5298; }
+        .total-row { background: #e8f4f8; font-weight: bold; }
+        .serial-col { width: 40px; text-align: center; background: #f5f7fa; }
+        
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: white; margin: 2% auto; padding: 20px; border-radius: 12px; width: 95%; max-width: 1600px; max-height: 90%; overflow: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #1e3c72; }
+        .modal-header h3 { color: #1e3c72; }
+        .close { color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; }
+        .stats-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 20px; }
+        .stats-table th { background: #1e3c72; color: white; padding: 8px; text-align: center; border: 1px solid #2a5298; }
+        .stats-table td { padding: 6px; border: 1px solid #ddd; text-align: center; }
+        .stats-group-title { font-size: 14px; font-weight: bold; color: #1e3c72; margin: 15px 0 10px 0; padding-bottom: 5px; border-bottom: 2px solid #ffc107; }
+        .stats-subtitle { font-size: 12px; color: #666; margin-bottom: 10px; }
+        
+        .stats-filter-panel { background: #f8f9fc; border-radius: 8px; padding: 10px 12px; margin-bottom: 15px; border: 1px solid #e0e4e8; }
+        .stats-filter-title { font-size: 12px; font-weight: bold; color: #1e3c72; margin-bottom: 10px; }
+        .stats-field-group { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+        .stats-field-group label { display: flex; align-items: center; gap: 4px; font-size: 10px; cursor: pointer; background: white; padding: 3px 8px; border-radius: 14px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <div class="logo">🏢 铁路客服设备设施统计系统</div>
+<div class="nav-menu">
+    <a href="statistics.html" class="nav-item active" id="navStatistics" style="text-decoration:none; color:white;">客运站商务候车室统计</a>
+</div>
+    </div>
+    
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header"><h3>🏢 组织机构</h3></div>
+            <div class="tree-container" id="treeContainer"></div>
+        </div>
+        
+        <div class="main-content">
+            <div class="content-header">
+                <h2>客运站商务候车室统计</h2>
+                <p>当前选中：<span id="currentPathDisplay">国铁集团</span></p>
+            </div>
+            
+            <div class="filter-section">
+                <div class="filter-title">🏛️ 车站基础信息筛选（多选）</div>
+                <div class="filter-grid" id="basicFilterGrid"></div>
+                
+                <div class="filter-title">🏠 候车室指标筛选（多选）</div>
+                <div class="roomtype-checkbox-group" id="roomTypeCheckboxGroup">
+                    <label><input type="checkbox" value="business" checked> 商务候车室</label>
+                    <label><input type="checkbox" value="businessSeat" checked> 商务座候车区</label>
+                    <label><input type="checkbox" value="commercial" checked> 商业候车室</label>
+                </div>
+                <div class="filter-grid" id="waitingFilterGrid"></div>
+                <div class="checkbox-group" id="numericCheckboxGroup"></div>
+                
+                <div class="filter-actions">
+                    <button class="btn btn-primary" onclick="applyFilters()">🔍 查询统计</button>
+                    <button class="btn btn-reset" onclick="resetFilters()">🗑️ 重置筛选</button>
+                    <button class="btn btn-export" onclick="exportMainTableToExcel()">📎 导出Excel</button>
+                </div>
+            </div>
+            
+            <div class="table-toolbar">
+                <button class="btn btn-stats" onclick="openStatsModal()">📊 查看设施汇总统计</button>
+            </div>
+            
+            <div class="table-wrapper">
+                <table class="data-table" id="statTable">
+                    <thead id="tableHeader"></thead>
+                    <tbody id="tableBody"></tbody>
+                    <tfoot id="tableFoot"></tfoot>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <div id="statsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>设施汇总统计</h3>
+                <div>
+                    <button class="btn btn-export" onclick="exportStatsTableToExcel()" style="margin-right: 10px;">📎 导出统计报表</button>
+                    <span class="close" onclick="closeStatsModal()">&times;</span>
+                </div>
+            </div>
+            <div id="statsModalBody"></div>
+        </div>
+    </div>
+
+<script>
+    // ==================== 组织机构数据（带车站层级） ====================
+    const orgData = {
+        "国铁集团": {
+            "北京局": {
+                "北京车务段": ["北京西站", "北京南站", "北京站", "北京北站", "丰台站"],
+                "天津车务段": ["天津站", "天津西站", "塘沽站"],
+                "石家庄车务段": ["石家庄站", "保定东站", "邯郸东站"]
+            },
+            "上海局": {
+                "上海车务段": ["上海虹桥站", "上海站", "上海南站"],
+                "杭州车务段": ["杭州东站", "杭州站", "宁波站", "温州南站"],
+                "南京车务段": ["南京南站", "南京站", "苏州站", "无锡站"]
+            },
+            "广州局": {
+                "广州车务段": ["广州南站", "广州站", "深圳北站", "珠海站"],
+                "长沙车务段": ["长沙南站", "长沙站", "株洲西站", "衡阳东站"],
+                "南宁车务段": ["南宁东站", "柳州站", "桂林北站"]
+            }
+        }
+    };
+    
+    // 车站基础信息筛选配置
+    const basicColumnGroups = [
+        { id: "stationLevel", label: "车站类别", options: ["一类", "二类", "三类", "四类"], getValue: (d) => d.level },
+        { id: "assetOwner", label: "站房资产所属单位", options: ["国铁全资", "地方全资", "国铁控股", "地方控股"], getValue: (d) => d.assetOwner },
+        { id: "investmentBody", label: "建设出资主体", options: ["路内", "路外"], getValue: (d) => d.investmentBody },
+        { id: "fundSource", label: "资金来源", options: ["国铁拨款", "铁路局自筹", "地方投资", "合资公司出资", "专项资金", "其他资金"], getValue: (d) => d.fundSource },
+        { id: "constructionType", label: "建设情况", options: ["站房设计建设", "站房后续扩建", "其他"], getValue: (d) => d.constructionType },
+        { id: "disposalInvolved", label: "涉及地方处置", options: ["是", "否"], getValue: (d) => d.disposalInvolved },
+        { id: "disposalProgress", label: "处置进度", options: ["待协商", "正协商", "已协商完毕", "待办理手续", "正办理手续", "已完成手续", "已完成处置"], getValue: (d) => d.disposalProgress }
+    ];
+    
+    // 候车室指标列定义
+    const waitingOptionColumns = [
+        { key: "decorationSubject", label: "装修出资主体", options: ["路内", "路外"] },
+        { key: "status", label: "状态", options: ["使用中", "改建", "在建", "功能调整", "停用"] },
+        { key: "enterChannel", label: "进站通道", options: ["有", "无"] },
+        { key: "exitChannel", label: "出站通道", options: ["有", "无"] },
+        { key: "wifi", label: "WIFI", options: ["有", "无"] },
+        { key: "reception", label: "接待台", options: ["有", "无"] },
+        { key: "parking", label: "独立停车区", options: ["有", "无"] }
+    ];
+    
+    const numericWaitingColumns = [
+        { key: "service", label: "服务人员数量" },
+        { key: "parkingSpots", label: "停车位数" },
+        { key: "open", label: "开放休息区数量" },
+        { key: "large", label: "大型休息厅数量" },
+        { key: "medium", label: "中型休息厅数量" },
+        { key: "small", label: "小型休息厅数量" },
+        { key: "meeting", label: "会议室数量" }
+    ];
+    
+    // 设施汇总统计字段配置
+    const statsFields = [
+        { key: "area", label: "面积(㎡)", type: "number" },
+        { key: "toilet", label: "卫生间", type: "option", options: ["有", "无"] },
+        { key: "kitchen", label: "操作间", type: "option", options: ["有", "无"] },
+        { key: "sofaCount", label: "沙发数量", type: "number" },
+        { key: "seatCount", label: "座位数量", type: "number" },
+        { key: "price", label: "挂牌价", type: "priceRange", options: ["100-200元", "200-500元", "500-1000元", "1000元以上"] },
+        { key: "decorationLevel", label: "装修程度", type: "option", options: ["豪华", "品质", "普通", "简单"] },
+        { key: "businessMode", label: "经营模式", type: "option", options: ["自营", "合作", "委托服务"] },
+        { key: "operatorSubject", label: "经营主体", type: "option", options: ["车站", "非运输企业", "路外单位", "其他"] },
+        { key: "externalBiz", label: "对外经营", type: "option", options: ["是", "否"] },
+        { key: "naming", label: "冠名", type: "option", options: ["是", "否"] },
+        { key: "contractAmount", label: "合同金额(万元)", type: "number" }
+    ];
+    
+    // 生成车站数据
+    function createStationData(railway, section, level, assetOwner, investmentBody, fundSource, constructionType, disposalInvolved, disposalProgress) {
+        const getRoomData = (baseService, baseSpots, baseOpen, baseLarge, baseMedium, baseSmall, baseMeeting, baseArea, baseSofa, baseSeat, basePrice, baseAmount) => ({
+            decorationSubject: investmentBody === "路内" ? "路内" : "路外",
+            status: "使用中",
+            enterChannel: "有",
+            exitChannel: "有",
+            wifi: "有",
+            service: baseService,
+            reception: "有",
+            parking: "有",
+            parkingSpots: baseSpots,
+            open: baseOpen,
+            large: baseLarge,
+            medium: baseMedium,
+            small: baseSmall,
+            meeting: baseMeeting,
+            facilities: [{ area: baseArea, toilet: "有", kitchen: "有", sofaCount: baseSofa, seatCount: baseSeat, price: basePrice, decorationLevel: "品质", businessMode: "自营", operatorSubject: "车站", externalBiz: "是", naming: "是", contractAmount: baseAmount }]
+        });
+        return {
+            railway, section, level, assetOwner, investmentBody, fundSource, constructionType, disposalInvolved, disposalProgress,
+            business: getRoomData(12, 50, 3, 2, 2, 1, 2, 150, 25, 50, 128, 50),
+            businessSeat: getRoomData(10, 40, 2, 2, 1, 1, 1, 120, 20, 40, 200, 35),
+            commercial: getRoomData(8, 30, 2, 1, 1, 1, 1, 100, 15, 30, 150, 25)
+        };
+    }
+    
+    // 构建车站数据
+    const stationData = {};
+    for (let r in orgData["国铁集团"]) {
+        for (let s in orgData["国铁集团"][r]) {
+            for (let st of orgData["国铁集团"][r][s]) {
+                let level = (r === "北京局" || r === "上海局" || r === "广州局") ? "一类" : "二类";
+                let assetOwner = r === "北京局" ? "国铁全资" : (r === "上海局" ? "国铁控股" : "地方控股");
+                let investmentBody = r === "北京局" ? "路内" : (r === "上海局" ? "路内" : "路外");
+                let fundSource = r === "北京局" ? "国铁拨款" : (r === "上海局" ? "合资公司出资" : "地方投资");
+                let constructionType = "站房设计建设";
+                let disposalInvolved = r === "北京局" ? "是" : "否";
+                let disposalProgress = r === "北京局" ? "已协商完毕" : "-";
+                stationData[st] = createStationData(r, s, level, assetOwner, investmentBody, fundSource, constructionType, disposalInvolved, disposalProgress);
+            }
+        }
+    }
+    
+    // 全局状态
+    let basicSelectedValues = {};
+    let waitingSelectedValues = {};
+    let selectedNumericColumns = [...numericWaitingColumns.map(c => c.key)];
+    let selectedRoomTypes = ["business", "businessSeat", "commercial"];
+    let currentDataSource = [];
+    let currentDataLevel = 'railway';
+    let currentParentNode = '国铁集团';
+    let filteredDataSource = [];
+    
+    let statsSelectedFields = statsFields.filter(f => f.type === "number").map(f => f.key);
+    let statsOptionSelectedValues = {};
+    let currentStatsRows = [];
+    let currentStatsHeaders = [];
+    
+    function createMultiSelectFilter(filterId, label, options, container, valueStore, onChangeCallback) {
+        const div = document.createElement("div"); div.className = "filter-group";
+        const labelSpan = document.createElement("label"); labelSpan.innerText = label;
+        const wrapper = document.createElement("div"); wrapper.className = "multi-select-wrapper";
+        const trigger = document.createElement("div"); trigger.className = "multi-select-trigger";
+        const span = document.createElement("span"); span.innerText = "请选择";
+        const arrow = document.createElement("span"); arrow.innerText = "▼";
+        trigger.appendChild(span); trigger.appendChild(arrow);
+        const dropdown = document.createElement("div"); dropdown.className = "multi-select-dropdown";
+        const optionsDiv = document.createElement("div");
+        const checkboxes = {};
+        options.forEach(opt => {
+            const lbl = document.createElement("label");
+            const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = opt;
+            lbl.appendChild(cb); lbl.appendChild(document.createTextNode(opt));
+            optionsDiv.appendChild(lbl);
+            checkboxes[opt] = cb;
+        });
+        const actionsDiv = document.createElement("div"); actionsDiv.className = "dropdown-actions";
+        const btnAll = document.createElement("button"); btnAll.innerText = "全选"; btnAll.className = "btn-sm";
+        const btnClear = document.createElement("button"); btnClear.innerText = "全不选"; btnClear.className = "btn-sm";
+        const btnConfirm = document.createElement("button"); btnConfirm.innerText = "确定"; btnConfirm.className = "btn-sm btn-primary-sm";
+        actionsDiv.appendChild(btnAll); actionsDiv.appendChild(btnClear); actionsDiv.appendChild(btnConfirm);
+        dropdown.appendChild(optionsDiv); dropdown.appendChild(actionsDiv);
+        wrapper.appendChild(trigger); wrapper.appendChild(dropdown);
+        div.appendChild(labelSpan); div.appendChild(wrapper);
+        container.appendChild(div);
+        if(!valueStore[filterId]) valueStore[filterId] = [];
+        const updateText = () => { let selected = options.filter(o => checkboxes[o]?.checked); span.innerText = selected.length ? selected.join(",") : "请选择"; };
+        btnAll.onclick = (e) => { e.stopPropagation(); options.forEach(o => { if(checkboxes[o]) checkboxes[o].checked = true; }); updateText(); };
+        btnClear.onclick = (e) => { e.stopPropagation(); options.forEach(o => { if(checkboxes[o]) checkboxes[o].checked = false; }); updateText(); };
+        btnConfirm.onclick = (e) => { e.stopPropagation(); let vals = options.filter(o => checkboxes[o]?.checked); valueStore[filterId] = vals; dropdown.classList.remove("show"); updateText(); if(onChangeCallback) onChangeCallback(); };
+        trigger.onclick = (e) => { e.stopPropagation(); document.querySelectorAll(".multi-select-dropdown").forEach(d => { if(d !== dropdown) d.classList.remove("show"); }); dropdown.classList.toggle("show"); };
+        if(valueStore[filterId]) { valueStore[filterId].forEach(v => { if(checkboxes[v]) checkboxes[v].checked = true; }); updateText(); }
+    }
+    
+    function initFilters() {
+        const basicContainer = document.getElementById("basicFilterGrid"); basicContainer.innerHTML = "";
+        basicColumnGroups.forEach(g => createMultiSelectFilter(g.id, g.label, g.options, basicContainer, basicSelectedValues, applyFilters));
+        const waitingContainer = document.getElementById("waitingFilterGrid"); waitingContainer.innerHTML = "";
+        waitingOptionColumns.forEach(col => createMultiSelectFilter(col.key, col.label, col.options, waitingContainer, waitingSelectedValues, applyFilters));
+        const numericContainer = document.getElementById("numericCheckboxGroup"); numericContainer.innerHTML = "";
+        numericWaitingColumns.forEach(col => {
+            const label = document.createElement("label");
+            const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = col.key; cb.checked = selectedNumericColumns.includes(col.key);
+            cb.onchange = () => { if(cb.checked) { if(!selectedNumericColumns.includes(col.key)) selectedNumericColumns.push(col.key); } else { selectedNumericColumns = selectedNumericColumns.filter(k => k !== col.key); } renderTable(); };
+            label.appendChild(cb); label.appendChild(document.createTextNode(col.label)); numericContainer.appendChild(label);
+        });
+    }
+    
+    function getSelectedRoomTypesFromUI() { return Array.from(document.querySelectorAll('#roomTypeCheckboxGroup input:checked')).map(cb => cb.value); }
+    
+    function filterRow(rowData) {
+        if(currentDataLevel !== 'station') return true;
+        let d = stationData[rowData.station];
+        if(!d) return true;
+        for(let g of basicColumnGroups) {
+            let selected = basicSelectedValues[g.id] || [];
+            if(selected.length && !selected.includes(g.getValue(d))) return false;
+        }
+        let roomTypes = getSelectedRoomTypesFromUI();
+        for(let col of waitingOptionColumns) {
+            let selected = waitingSelectedValues[col.key] || [];
+            if(selected.length) {
+                let match = roomTypes.some(rt => selected.includes(d[rt]?.[col.key]));
+                if(!match) return false;
+            }
+        }
+        return true;
+    }
+    
+    function getBasicDisplayColumns() {
+        let basicColumns = [];
+        for(let g of basicColumnGroups) {
+            let selected = basicSelectedValues[g.id] || [];
+            for(let opt of selected) basicColumns.push({ key: `${g.id}_${opt}`, label: `${g.label}（${opt}）`, type: 'basic', groupId: g.id, option: opt });
+        }
+        return basicColumns;
+    }
+    
+    function getWaitingDisplayColumns() {
+        let waitingColumns = [];
+        for(let col of waitingOptionColumns) {
+            let selected = waitingSelectedValues[col.key] || [];
+            for(let opt of selected) waitingColumns.push({ key: col.key, label: `${col.label}（${opt}）`, type: 'waitingOption', metricKey: col.key, option: opt });
+        }
+        for(let col of numericWaitingColumns) {
+            if(selectedNumericColumns.includes(col.key)) waitingColumns.push({ key: col.key, label: col.label, type: 'waitingNumber', metricKey: col.key });
+        }
+        return waitingColumns;
+    }
+    
+    function getBasicCellValue(stationData, col) {
+        let val = basicColumnGroups.find(g => g.id === col.groupId)?.getValue(stationData);
+        return val === col.option ? 1 : 0;
+    }
+    
+    function getWaitingCellValue(room, col) {
+        if(!room) return 0;
+        if(col.type === 'waitingOption') return room[col.metricKey] === col.option ? 1 : 0;
+        if(col.type === 'waitingNumber') return typeof room[col.metricKey] === 'number' ? room[col.metricKey] : 0;
+        return 0;
+    }
+    
+    function renderTable() {
+        let roomTypes = getSelectedRoomTypesFromUI();
+        if(roomTypes.length === 0) {
+            document.getElementById('tableHeader').innerHTML = '<tr><th colspan="6">请至少选择一个候车室类型</th></tr>';
+            document.getElementById('tableBody').innerHTML = '';
+            document.getElementById('tableFoot').innerHTML = '';
+            return;
+        }
+        
+        let basicColumns = getBasicDisplayColumns();
+        let waitingColumns = getWaitingDisplayColumns();
+        
+        // 固定列：序号、名称（以及可能的路局、站段）
+        let fixedColsCount = 2; // 序号 + 名称
+        if(currentDataLevel !== 'railway') fixedColsCount++; // 路局列
+        if(currentDataLevel === 'station') fixedColsCount++; // 站段列
+        
+        // 第一行表头
+        let headerRow1 = '<table><th rowspan="2">序号</th><th rowspan="2">名称</th>';
+        if(currentDataLevel !== 'railway') headerRow1 += '<th rowspan="2">路局</th>';
+        if(currentDataLevel === 'station') headerRow1 += '<th rowspan="2">站段</th>';
+        if(basicColumns.length > 0) headerRow1 += `<th colspan="${basicColumns.length}">车站基础信息</th>`;
+        for(let type of roomTypes) {
+            let typeName = type === 'business' ? '商务候车室' : (type === 'businessSeat' ? '商务座候车区' : '商业候车室');
+            if(waitingColumns.length > 0) headerRow1 += `<th colspan="${waitingColumns.length}">${typeName}</th>`;
+        }
+        headerRow1 += '</tr>';
+        
+        // 第二行表头
+        let headerRow2 = '<tr>';
+        for(let col of basicColumns) headerRow2 += `<th>${col.label}</th>`;
+        for(let i = 0; i < roomTypes.length; i++) {
+            for(let col of waitingColumns) headerRow2 += `<th>${col.label}</th>`;
+        }
+        headerRow2 += '</tr>';
+        document.getElementById('tableHeader').innerHTML = headerRow1 + headerRow2;
+        
+        if(!filteredDataSource.length) {
+            let colCount = fixedColsCount + basicColumns.length + roomTypes.length * waitingColumns.length;
+            document.getElementById('tableBody').innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;">暂无数据<\/tr>`;
+            document.getElementById('tableFoot').innerHTML = '';
+            return;
+        }
+        
+        let bodyHtml = '', sn = 1;
+        for(let row of filteredDataSource) {
+            bodyHtml += `<tr><td class="serial-col">${sn++}</td>`;
+            bodyHtml += `<td class="station-name">${row.name}</td>`;
+            if(currentDataLevel !== 'railway') bodyHtml += `<td>${row.railway || '-'}</td>`;
+            if(currentDataLevel === 'station') bodyHtml += `<td>${row.section || '-'}</td>`;
+            
+            if(currentDataLevel === 'station' && row.station && stationData[row.station]) {
+                let d = stationData[row.station];
+                for(let col of basicColumns) {
+                    let val = getBasicCellValue(d, col);
+                    bodyHtml += `<td class="number-cell">${val}</td>`;
+                }
+                for(let type of roomTypes) {
+                    let room = d[type] || {};
+                    for(let col of waitingColumns) {
+                        let val = getWaitingCellValue(room, col);
+                        bodyHtml += `<td class="number-cell">${val}</td>`;
+                    }
+                }
+            } else {
+                for(let col of basicColumns) bodyHtml += `<td class="number-cell">-</td>`;
+                for(let type of roomTypes) {
+                    for(let col of waitingColumns) bodyHtml += `<td class="number-cell">-</td>`;
+                }
+            }
+            bodyHtml += `</tr>`;
+        }
+        document.getElementById('tableBody').innerHTML = bodyHtml;
+        document.getElementById('tableFoot').innerHTML = '';
+    }
+    
+    function applyFilters() {
+        filteredDataSource = currentDataSource.filter(row => filterRow(row));
+        renderTable();
+        document.getElementById('currentPathDisplay').innerText = currentParentNode;
+    }
+    
+    function resetFilters() {
+        for(let k in basicSelectedValues) basicSelectedValues[k] = [];
+        for(let k in waitingSelectedValues) waitingSelectedValues[k] = [];
+        selectedNumericColumns = [...numericWaitingColumns.map(c => c.key)];
+        document.querySelectorAll('#roomTypeCheckboxGroup input').forEach(cb => cb.checked = true);
+        initFilters();
+        applyFilters();
+    }
+    
+    function loadDataByNode(type, name, railwayName = null) {
+        currentParentNode = name;
+        let data = [];
+        if(type === 'guotie') {
+            currentDataLevel = 'railway';
+            for(let r in orgData["国铁集团"]) {
+                data.push({ name: r, railway: r });
+            }
+        } else if(type === 'railway') {
+            currentDataLevel = 'section';
+            for(let s in orgData["国铁集团"][name]) {
+                data.push({ name: s, railway: name, section: s });
+            }
+        } else if(type === 'section') {
+            currentDataLevel = 'station';
+            for(let st of orgData["国铁集团"][railwayName][name]) {
+                data.push({ name: st, railway: railwayName, section: name, station: st });
+            }
+        }
+        currentDataSource = data;
+        applyFilters();
+    }
+    
+    function exportMainTableToExcel() {
+        let roomTypes = getSelectedRoomTypesFromUI();
+        if(!filteredDataSource.length || !roomTypes.length) { alert("无数据可导出"); return; }
+        let basicColumns = getBasicDisplayColumns();
+        let waitingColumns = getWaitingDisplayColumns();
+        let headers = ["序号", "名称"];
+        if(currentDataLevel !== 'railway') headers.push("路局");
+        if(currentDataLevel === 'station') headers.push("站段");
+        for(let col of basicColumns) headers.push(col.label);
+        for(let type of roomTypes) {
+            let typeName = type === 'business' ? '商务候车室' : (type === 'businessSeat' ? '商务座候车区' : '商业候车室');
+            for(let col of waitingColumns) headers.push(`${typeName}_${col.label}`);
+        }
+        let rows = [], sn = 1;
+        for(let row of filteredDataSource) {
+            let rowData = [sn++, row.name];
+            if(currentDataLevel !== 'railway') rowData.push(row.railway || '-');
+            if(currentDataLevel === 'station') rowData.push(row.section || '-');
+            if(currentDataLevel === 'station' && row.station && stationData[row.station]) {
+                let d = stationData[row.station];
+                for(let col of basicColumns) rowData.push(getBasicCellValue(d, col));
+                for(let type of roomTypes) {
+                    let room = d[type] || {};
+                    for(let col of waitingColumns) rowData.push(getWaitingCellValue(room, col));
+                }
+            } else {
+                for(let col of basicColumns) rowData.push('-');
+                for(let type of roomTypes) {
+                    for(let col of waitingColumns) rowData.push('-');
+                }
+            }
+            rows.push(rowData);
+        }
+        let html = '<html><head><meta charset="UTF-8"><style>th{background:#1e3c72;color:#fff;border:1px solid #2a5298;padding:8px;}td{border:1px solid #999;padding:6px;}table{border-collapse:collapse;}</style></head><body><table border="1"><table>' + headers.map(h=>'<th>'+h+'</th>').join('') + '<\/tr>';
+        rows.forEach(row => { html += '<tr>' + row.map(c=>'<td>'+c+'</td>').join('') + '<\/tr>'; });
+        html += '<\/table><\/body><\/html>';
+        let blob = new Blob(['\uFEFF'+html], {type:'application/vnd.ms-excel'});
+        let a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="商务候车室统计报表.xls"; a.click(); URL.revokeObjectURL(a.href);
+    }
+    
+    // 设施汇总统计弹窗
+    function openStatsModal() {
+        if(filteredDataSource.length === 0) { alert("暂无数据"); return; }
+        let roomTypes = getSelectedRoomTypesFromUI();
+        if(roomTypes.length === 0) { alert("请至少选择一个候车室类型"); return; }
+        
+        let modalHtml = `
+            <div class="stats-filter-panel">
+                <div class="stats-filter-title">📊 请勾选需要统计的字段</div>
+                <div style="margin-bottom:8px;"><strong>📌 数值型字段：</strong></div>
+                <div class="stats-field-group" id="statsNumberFields"></div>
+                <div style="margin:12px 0 8px 0;"><strong>📌 选项型字段：</strong></div>
+                <div class="stats-field-group" id="statsOptionFields"></div>
+                <div style="margin-top:12px; text-align:right;">
+                    <button class="btn btn-primary btn-sm" onclick="refreshStatsTable()">刷新统计</button>
+                </div>
+            </div>
+            <div id="statsTableContainer"></div>
+        `;
+        document.getElementById('statsModalBody').innerHTML = modalHtml;
+        
+        const numberContainer = document.getElementById('statsNumberFields');
+        const optionContainer = document.getElementById('statsOptionFields');
+        numberContainer.innerHTML = "";
+        optionContainer.innerHTML = "";
+        
+        statsFields.forEach(field => {
+            if(field.type === "number") {
+                const label = document.createElement("label");
+                const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = field.key; cb.checked = statsSelectedFields.includes(field.key);
+                cb.onchange = () => { if(cb.checked) { if(!statsSelectedFields.includes(field.key)) statsSelectedFields.push(field.key); } else { statsSelectedFields = statsSelectedFields.filter(k => k !== field.key); } };
+                label.appendChild(cb); label.appendChild(document.createTextNode(field.label)); numberContainer.appendChild(label);
+            } else {
+                const div = document.createElement("div"); div.style.minWidth = "140px"; div.style.marginRight = "8px";
+                const labelSpan = document.createElement("label"); labelSpan.innerText = field.label; labelSpan.style.fontSize = "10px"; labelSpan.style.display = "block"; labelSpan.style.marginBottom = "2px";
+                const wrapper = document.createElement("div"); wrapper.className = "multi-select-wrapper"; wrapper.style.minWidth = "130px";
+                const trigger = document.createElement("div"); trigger.className = "multi-select-trigger";
+                const span = document.createElement("span"); span.innerText = "请选择";
+                const arrow = document.createElement("span"); arrow.innerText = "▼";
+                trigger.appendChild(span); trigger.appendChild(arrow);
+                const dropdown = document.createElement("div"); dropdown.className = "multi-select-dropdown";
+                const optionsDiv = document.createElement("div");
+                const checkboxes = {};
+                const opts = field.options;
+                opts.forEach(opt => {
+                    const lbl = document.createElement("label");
+                    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = opt;
+                    lbl.appendChild(cb); lbl.appendChild(document.createTextNode(opt));
+                    optionsDiv.appendChild(lbl);
+                    checkboxes[opt] = cb;
+                });
+                const actionsDiv = document.createElement("div"); actionsDiv.className = "dropdown-actions";
+                const btnAll = document.createElement("button"); btnAll.innerText = "全选"; btnAll.className = "btn-sm";
+                const btnClear = document.createElement("button"); btnClear.innerText = "全不选"; btnClear.className = "btn-sm";
+                const btnConfirm = document.createElement("button"); btnConfirm.innerText = "确定"; btnConfirm.className = "btn-sm btn-primary-sm";
+                actionsDiv.appendChild(btnAll); actionsDiv.appendChild(btnClear); actionsDiv.appendChild(btnConfirm);
+                dropdown.appendChild(optionsDiv); dropdown.appendChild(actionsDiv);
+                wrapper.appendChild(trigger); wrapper.appendChild(dropdown);
+                div.appendChild(labelSpan); div.appendChild(wrapper);
+                optionContainer.appendChild(div);
+                if(!statsOptionSelectedValues[field.key]) statsOptionSelectedValues[field.key] = [];
+                const updateText = () => { let selected = opts.filter(o => checkboxes[o]?.checked); span.innerText = selected.length ? selected.join(",") : "请选择"; };
+                btnAll.onclick = (e) => { e.stopPropagation(); opts.forEach(o => { if(checkboxes[o]) checkboxes[o].checked = true; }); updateText(); };
+                btnClear.onclick = (e) => { e.stopPropagation(); opts.forEach(o => { if(checkboxes[o]) checkboxes[o].checked = false; }); updateText(); };
+                btnConfirm.onclick = (e) => { e.stopPropagation(); let vals = opts.filter(o => checkboxes[o]?.checked); statsOptionSelectedValues[field.key] = vals; dropdown.classList.remove("show"); updateText(); };
+                trigger.onclick = (e) => { e.stopPropagation(); document.querySelectorAll(".multi-select-dropdown").forEach(d => { if(d !== dropdown) d.classList.remove("show"); }); dropdown.classList.toggle("show"); };
+                if(statsOptionSelectedValues[field.key]) { statsOptionSelectedValues[field.key].forEach(v => { if(checkboxes[v]) checkboxes[v].checked = true; }); updateText(); }
+            }
+        });
+        refreshStatsTable();
+        document.getElementById('statsModal').style.display = 'block';
+    }
+    
+    function refreshStatsTable() {
+        let roomTypes = getSelectedRoomTypesFromUI();
+        let displayFields = [];
+        for(let field of statsFields) {
+            if(field.type === "number") {
+                if(statsSelectedFields.includes(field.key)) displayFields.push({ ...field, displayAs: "number" });
+            } else if(field.type === "option" || field.type === "priceRange") {
+                let selected = statsOptionSelectedValues[field.key] || [];
+                for(let opt of selected) displayFields.push({ ...field, displayAs: field.type === "priceRange" ? "priceRange" : "option", option: opt });
+            }
+        }
+        if(displayFields.length === 0) { document.getElementById('statsTableContainer').innerHTML = '<div style="padding:20px;text-align:center;">请至少勾选一个统计字段或选择选项</div>'; return; }
+        
+        let selectedFacilityTypes = [];
+        if(selectedNumericColumns.includes('open')) selectedFacilityTypes.push({ key: 'open', name: '开放休息区' });
+        if(selectedNumericColumns.includes('large')) selectedFacilityTypes.push({ key: 'large', name: '大型休息厅' });
+        if(selectedNumericColumns.includes('medium')) selectedFacilityTypes.push({ key: 'medium', name: '中型休息厅' });
+        if(selectedNumericColumns.includes('small')) selectedFacilityTypes.push({ key: 'small', name: '小型休息厅' });
+        if(selectedNumericColumns.includes('meeting')) selectedFacilityTypes.push({ key: 'meeting', name: '会议室' });
+        if(selectedFacilityTypes.length === 0) { document.getElementById('statsTableContainer').innerHTML = '<div style="padding:20px;text-align:center;">请在候车室指标筛选中至少勾选一个设施类型</div>'; return; }
+        
+        currentStatsHeaders = [];
+        currentStatsRows = [];
+        let allHtml = '';
+        
+        for(let roomType of roomTypes) {
+            let roomTypeName = roomType === 'business' ? '商务候车室' : (roomType === 'businessSeat' ? '商务座候车区' : '商业候车室');
+            allHtml += `<div class="stats-group-title">📌 ${roomTypeName}</div>`;
+            
+            let fixedCols = ['序号', '名称'];
+            if(currentDataLevel !== 'railway') fixedCols.push('路局');
+            if(currentDataLevel === 'station') fixedCols.push('站段');
+            
+            let headerRow1 = '<tr>';
+            for(let col of fixedCols) headerRow1 += `<th rowspan="2">${col}</th>`;
+            for(let ft of selectedFacilityTypes) headerRow1 += `<th colspan="${displayFields.length + 1}">${ft.name}</th>`;
+            headerRow1 += '</tr>';
+            
+            let headerRow2 = '<tr>';
+            for(let ft of selectedFacilityTypes) {
+                headerRow2 += `<th>数量</th>`;
+                for(let df of displayFields) {
+                    let label = df.displayAs === "option" ? `${df.label}（${df.option}）` : df.label;
+                    headerRow2 += `<th>${label}</th>`;
+                }
+            }
+            headerRow2 += '</tr>';
+            
+            let rows = [], sn = 1;
+            for(let row of filteredDataSource) {
+                let rowData = [sn++, row.name];
+                if(currentDataLevel !== 'railway') rowData.push(row.railway || '-');
+                if(currentDataLevel === 'station') rowData.push(row.section || '-');
+                
+                for(let ft of selectedFacilityTypes) {
+                    if(currentDataLevel === 'station' && row.station && stationData[row.station]) {
+                        let room = stationData[row.station][roomType];
+                        let facilities = room?.facilities || [];
+                        rowData.push(facilities.length);
+                        for(let df of displayFields) {
+                            let total = 0;
+                            for(let fac of facilities) {
+                                if(df.type === "number") total += fac[df.key] || 0;
+                                else if(df.type === "option") { if(fac[df.key] === df.option) total++; }
+                                else if(df.type === "priceRange") {
+                                    let price = fac.price;
+                                    if(price >= 100 && price < 200) { if(df.option === "100-200元") total++; }
+                                    else if(price >= 200 && price < 500) { if(df.option === "200-500元") total++; }
+                                    else if(price >= 500 && price < 1000) { if(df.option === "500-1000元") total++; }
+                                    else if(price >= 1000) { if(df.option === "1000元以上") total++; }
+                                }
+                            }
+                            rowData.push(total);
+                        }
+                    } else {
+                        rowData.push('-');
+                        for(let df of displayFields) rowData.push('-');
+                    }
+                }
+                rows.push(rowData);
+                if(currentStatsRows.length === 0) {
+                    let headerRow = [...fixedCols];
+                    for(let ft of selectedFacilityTypes) {
+                        headerRow.push(`${ft.name}_数量`);
+                        for(let df of displayFields) headerRow.push(`${ft.name}_${df.displayAs === "option" ? `${df.label}（${df.option}）` : df.label}`);
+                    }
+                    currentStatsHeaders = headerRow;
+                }
+                currentStatsRows.push(rowData);
+            }
+            
+            allHtml += '<table class="stats-table"><thead>' + headerRow1 + headerRow2 + '</thead><tbody>';
+            for(let row of rows) {
+                allHtml += '<tr>';
+                for(let cell of row) allHtml += '<td>' + cell + '</td>';
+                allHtml += '</tr>';
+            }
+            allHtml += '</tbody></table>';
+        }
+        document.getElementById('statsTableContainer').innerHTML = allHtml;
+    }
+    
+    function exportStatsTableToExcel() {
+        if(currentStatsRows.length === 0 || currentStatsHeaders.length === 0) { alert("暂无统计数据可导出"); return; }
+        let html = '<html><head><meta charset="UTF-8"><style>th{background:#1e3c72;color:#fff;}</style></head><body><table border="1"><tr>' + currentStatsHeaders.map(h=>'<th>'+h+'</th>').join('') + '<\/tr>';
+        currentStatsRows.forEach(row => { html += '<tr>' + row.map(c=>'<td>'+c+'</td>').join('') + '<\/tr>'; });
+        html += '<\/table><\/body><\/html>';
+        let blob = new Blob(['\uFEFF'+html], {type:'application/vnd.ms-excel'});
+        let a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="设施汇总统计报表.xls"; a.click(); URL.revokeObjectURL(a.href);
+    }
+    
+    function closeStatsModal() { document.getElementById('statsModal').style.display = 'none'; }
+    
+    // 构建树（车务段下可展开车站）
+    function buildTree() {
+        let container = document.getElementById('treeContainer'); container.innerHTML = '';
+        function createNode(name, content, level=0, parentRailway=null) {
+            const node = document.createElement('div'); node.className = 'tree-node';
+            const header = document.createElement('div'); header.className = 'tree-node-header';
+            const icon = document.createElement('span'); icon.className = 'tree-icon';
+            const isBranch = content && typeof content === 'object' && !Array.isArray(content);
+            icon.textContent = isBranch ? '▶' : '●';
+            const nameSpan = document.createElement('span'); nameSpan.className = 'node-name'; nameSpan.textContent = name;
+            let count = 0;
+            if(Array.isArray(content)) count = content.length;
+            else if(isBranch) count = Object.keys(content).length;
+            const countSpan = document.createElement('span'); countSpan.className = 'node-count'; countSpan.textContent = count > 0 ? `(${count})` : '';
+            header.appendChild(icon); header.appendChild(nameSpan); header.appendChild(countSpan);
+            if(Array.isArray(content)) {
+                const childContainer = document.createElement('div'); childContainer.className = 'tree-children';
+                for(let st of content) {
+                    const stNode = document.createElement('div'); stNode.className = 'tree-node';
+                    const stHeader = document.createElement('div'); stHeader.className = 'tree-node-header';
+                    const stIcon = document.createElement('span'); stIcon.className = 'tree-icon'; stIcon.textContent = '●';
+                    const stNameSpan = document.createElement('span'); stNameSpan.className = 'node-name'; stNameSpan.textContent = st;
+                    stHeader.appendChild(stIcon); stHeader.appendChild(stNameSpan);
+                    stHeader.onclick = (e) => { e.stopPropagation(); selectTreeNode('station', st, stHeader, parentRailway); };
+                    stNode.appendChild(stHeader);
+                    childContainer.appendChild(stNode);
+                }
+                header.onclick = (e) => { e.stopPropagation(); 
+                    selectTreeNode('section', name, header, parentRailway);
+                    icon.textContent = childContainer.classList.contains('open') ? '▶' : '▼'; 
+                    childContainer.classList.toggle('open'); 
+                };
+                node.appendChild(header); node.appendChild(childContainer);
+                return node;
+            } else if(isBranch) {
+                const childContainer = document.createElement('div'); childContainer.className = 'tree-children';
+                for(let [k,v] of Object.entries(content)) {
+                    childContainer.appendChild(createNode(k, v, level+1, level===1 ? name : parentRailway));
+                }
+                header.onclick = (e) => { e.stopPropagation(); 
+                    if(level === 0) selectTreeNode('guotie', name, header);
+                    else if(level === 1) selectTreeNode('railway', name, header);
+                    icon.textContent = childContainer.classList.contains('open') ? '▶' : '▼'; 
+                    childContainer.classList.toggle('open'); 
+                };
+                node.appendChild(header); node.appendChild(childContainer);
+                return node;
+            }
+            node.appendChild(header);
+            return node;
+        }
+        for(let [name, content] of Object.entries(orgData)) container.appendChild(createNode(name, content, 0));
+    }
+    
+    function selectTreeNode(type, name, headerElement, railwayName = null) {
+        document.querySelectorAll('.tree-node-header.selected').forEach(el => el.classList.remove('selected'));
+        if(headerElement) headerElement.classList.add('selected');
+        if(type === 'guotie') loadDataByNode('guotie', name);
+        else if(type === 'railway') loadDataByNode('railway', name);
+        else if(type === 'section') {
+            let foundRailway = railwayName;
+            if(!foundRailway) {
+                for(let r in orgData["国铁集团"]) {
+                    if(orgData["国铁集团"][r][name]) { foundRailway = r; break; }
+                }
+            }
+            loadDataByNode('section', name, foundRailway);
+        } else if(type === 'station') {
+            let foundRailway = null, foundSection = null;
+            for(let r in orgData["国铁集团"]) {
+                for(let s in orgData["国铁集团"][r]) {
+                    if(orgData["国铁集团"][r][s].includes(name)) { foundRailway = r; foundSection = s; break; }
+                }
+            }
+            loadDataByNode('section', foundSection, foundRailway);
+        }
+    }
+    
+    initFilters();
+    buildTree();
+    loadDataByNode('guotie', '国铁集团');
+</script>
+</body>
+</html>
