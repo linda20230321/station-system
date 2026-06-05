@@ -1,1475 +1,1000 @@
-# app.py - 车站休息设施管理系统（完整版）
-from flask import Flask, render_template, request, jsonify, send_file
-import pandas as pd
-from io import BytesIO
-import datetime
+"""
+铁路广播监测系统 - 后端主程序
+功能：音频采集、实时推送、录音存储、历史回放API、区域设备管理
+"""
+
+from flask import Flask, render_template, send_file, jsonify, request
+from flask_socketio import SocketIO, emit
+from flask_cors import CORS
+
+# 解决pyaudio导入问题 - 在云服务器上可能没有pyaudio
+try:
+    import pyaudio
+    PYAVAILABLE = True
+except ImportError:
+    PYAVAILABLE = False
+    print("警告: pyaudio未安装，将使用模拟模式")
+    # 创建一个虚拟的pyaudio模块
+    class MockPaInt16:
+        pass
+    
+    class MockPyAudio:
+        def __init__(self):
+            pass
+        def terminate(self):
+            pass
+        def open(self, **kwargs):
+            return None
+    
+    pyaudio = type('pyaudio', (), {
+        'paInt16': MockPaInt16(),
+        'PyAudio': MockPyAudio
+    })()
+
+import wave
+import threading
+import time
 import os
-from werkzeug.utils import secure_filename
+import sqlite3
+import datetime
+import json
+import numpy as np
+from pathlib import Path
+from queue import Queue
+import uuid
+import logging
+import random
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+from enum import Enum
+from functools import wraps
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'railway-broadcast-monitor-2024'
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600  # 静态文件缓存
+CORS(app)
 
-# 配置图片上传
-UPLOAD_FOLDER = 'static/uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'bmp'}
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+# 使用 polling 模式而不是 websocket，更适合云服务器
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', 
+                    ping_timeout=60, ping_interval=25)
 
 
-# ==================== 数据结构 ====================
-# 国铁 -> 路局 -> 站段 -> 车站 的树形结构
-# 车站等级使用：一级、二级、三级、四级
-railway_data = {
-    "国铁集团": {
-        "北京局": {
-            "北京车务段": {
-                "北京南站": {
-                    "station_name": "北京南站",
-                    "basic_info": {
-                        "省": "北京市",
-                        "市": "北京市",
-                        "区": "丰台区",
-                        "街道": "南站街道",
-                        "车站等级": "一级",
-                        "车站类别": "客运站",
-                        "站房资产所属单位": "北京局集团",
-                        "建设出资主体": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团",
-                        "建成时间": "2008-08-01",
-                        "建设情况": "已建成",
-                        "是否涉及地方处置": "否",
-                        "处置方式": "-",
-                        "处置进度": "-",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:00",
-                        "服务人员数量": 12,
-                        "服务人员_人每班": 4,
-                        "联系电话_座机": "010-67561234",
-                        "联系电话_手机": "13800138000",
-                        "独立停车区": "有",
-                        "停车位数量": 50,
-                        "登车提醒时间": 15
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室（南）", "装修出资主体": "路局出资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室（北）", "装修出资主体": "路局出资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区1", "装修出资主体": "合资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区2", "装修出资主体": "合资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室", "装修出资主体": "企业出资", "状态": "正常运营", "是否有接待台": "有"}
-                    ]
+class DeviceStatus(Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    ALERT = "alert"
+
+
+@dataclass
+class Device:
+    """拾音器信息"""
+    id: str
+    name: str
+    station: str
+    area_level2: str
+    area_level3: str
+    area_level4: str
+    status: DeviceStatus
+    ip: str
+    mac: str
+    last_heartbeat: datetime.datetime = None
+
+
+@dataclass
+class AreaBinding:
+    """区域绑定关系"""
+    id: str
+    level1: str
+    level2: str
+    level3: str
+    level4: str
+    device_ids: List[str]
+
+
+# 添加缓存装饰器
+def cached(timeout=5):
+    def decorator(func):
+        cache = {}
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            key = str(args) + str(sorted(kwargs.items()))
+            now = time.time()
+            if key in cache and now - cache[key][0] < timeout:
+                return cache[key][1]
+            result = func(*args, **kwargs)
+            cache[key] = (now, result)
+            return result
+        return wrapper
+    return decorator
+
+
+class AudioMonitorSystem:
+    """音频监控系统核心类"""
+
+    def __init__(self):
+        # 加载配置
+        self.load_config()
+
+        # 音频参数
+        self.CHUNK = self.config.get('chunk', 1024)
+        self.FORMAT = pyaudio.paInt16
+        self.CHANNELS = self.config.get('channels', 1)
+        self.RATE = self.config.get('sample_rate', 16000)
+
+        # 状态变量
+        self.is_recording = False
+        self.devices: Dict[str, Device] = {}
+        self.area_bindings: Dict[str, AreaBinding] = {}
+
+        # 初始化PyAudio
+        self.p = None
+        self.init_pyaudio()
+
+        # 创建存储目录
+        self.recording_dir = Path(self.config.get('recording_dir', 'recordings'))
+        self.recording_dir.mkdir(exist_ok=True)
+
+        # 初始化数据库
+        self.init_database()
+
+        # WebSocket连接管理
+        self.clients = set()
+
+        # 音量监测
+        self.device_volumes: Dict[str, float] = {}
+
+        # 缓存统计信息
+        self._stats_cache = None
+        self._stats_cache_time = 0
+        self._bindings_cache = None
+        self._bindings_cache_time = 0
+
+        # 初始化数据（减少模拟数据量）
+        self.init_area_hierarchy()
+        self.init_mock_devices()
+        self.init_mock_recordings_reduced()  # 使用减少的数据量
+        self.init_area_bindings()
+
+        # 启动告警监测线程（降低频率）
+        self.start_alert_monitor()
+
+        logger.info("铁路广播监测系统初始化完成")
+
+    def load_config(self):
+        """加载配置文件"""
+        default_config = {
+            'chunk': 1024,
+            'sample_rate': 16000,
+            'channels': 1,
+            'recording_dir': 'recordings',
+            'max_recordings': 10000,
+            'volume_threshold_low': 20,
+            'volume_threshold_high': 80,
+            'heartbeat_interval': 30,
+            'offline_timeout': 60
+        }
+
+        config_file = 'config.json'
+        if os.path.exists(config_file):
+            with open(config_file, 'r', encoding='utf-8') as f:
+                self.config = json.load(f)
+                for key, value in default_config.items():
+                    if key not in self.config:
+                        self.config[key] = value
+        else:
+            self.config = default_config
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=4, ensure_ascii=False)
+
+    def init_pyaudio(self):
+        """初始化PyAudio"""
+        if not PYAVAILABLE:
+            logger.warning("PyAudio不可用，将使用模拟模式")
+            self.p = None
+            return
+            
+        try:
+            self.p = pyaudio.PyAudio()
+            logger.info("PyAudio初始化成功")
+        except Exception as e:
+            logger.warning(f"PyAudio初始化失败: {e}，将使用模拟数据")
+            self.p = None
+
+    def init_database(self):
+        """初始化数据库"""
+        try:
+            db_path = 'railway_broadcast.db'
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self.cursor = self.conn.cursor()
+
+            # 删除旧表重建
+            self.cursor.execute('DROP TABLE IF EXISTS recordings')
+            self.cursor.execute('DROP TABLE IF EXISTS devices')
+            self.cursor.execute('DROP TABLE IF EXISTS area_bindings')
+
+            # 创建拾音器表
+            self.cursor.execute('''
+                CREATE TABLE devices (
+                    device_id TEXT PRIMARY KEY,
+                    device_name TEXT NOT NULL,
+                    station TEXT NOT NULL,
+                    area_level2 TEXT NOT NULL,
+                    area_level3 TEXT NOT NULL,
+                    area_level4 TEXT NOT NULL,
+                    status TEXT DEFAULT 'offline',
+                    ip TEXT,
+                    mac TEXT,
+                    last_heartbeat TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 录音记录表
+            self.cursor.execute('''
+                CREATE TABLE recordings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_id TEXT UNIQUE NOT NULL,
+                    device_id TEXT NOT NULL,
+                    device_name TEXT NOT NULL,
+                    area_level2 TEXT,
+                    area_level3 TEXT,
+                    area_level4 TEXT,
+                    filename TEXT NOT NULL,
+                    filepath TEXT NOT NULL,
+                    start_time TIMESTAMP NOT NULL,
+                    end_time TIMESTAMP,
+                    duration REAL,
+                    file_size INTEGER,
+                    avg_volume REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (device_id) REFERENCES devices(device_id)
+                )
+            ''')
+
+            # 区域绑定表
+            self.cursor.execute('''
+                CREATE TABLE area_bindings (
+                    id TEXT PRIMARY KEY,
+                    level1 TEXT NOT NULL,
+                    level2 TEXT NOT NULL,
+                    level3 TEXT NOT NULL,
+                    level4 TEXT NOT NULL,
+                    device_ids TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 创建索引
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_recordings_device ON recordings(device_id)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(start_time DESC)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_devices_area ON devices(area_level2, area_level3, area_level4)')
+
+            self.conn.commit()
+            logger.info("数据库初始化完成")
+        except Exception as e:
+            logger.error(f"数据库初始化失败: {e}")
+            raise
+
+    def init_area_hierarchy(self):
+        """初始化区域层级"""
+        self.area_data = {
+            "重庆东站": {
+                "候车室": {
+                    "A区检票口": ["A2、A3检票口", "A7、A8检票口", "A12、A13检票口"],
+                    "B区检票口": ["B1检票口", "B5、B6检票口", "B14、B15检票口"],
                 },
-                "北京西站": {
-                    "station_name": "北京西站",
-                    "basic_info": {
-                        "省": "北京市",
-                        "市": "北京市",
-                        "区": "海淀区",
-                        "街道": "羊坊店街道",
-                        "车站等级": "一级",
-                        "车站类别": "客运站",
-                        "站房资产所属单位": "北京局集团",
-                        "建设出资主体": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团",
-                        "建成时间": "1996-01-21",
-                        "建设情况": "已建成",
-                        "是否涉及地方处置": "否",
-                        "处置方式": "-",
-                        "处置进度": "-",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "23:00",
-                        "服务人员数量": 10,
-                        "服务人员_人每班": 3,
-                        "联系电话_座机": "010-51861234",
-                        "联系电话_手机": "13900139000",
-                        "独立停车区": "有",
-                        "停车位数量": 80,
-                        "登车提醒时间": 15
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室（南）", "装修出资主体": "路局出资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室（北）", "装修出资主体": "路局出资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区", "装修出资主体": "合资", "状态": "正常运营", "是否有接待台": "有"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室", "装修出资主体": "企业出资", "状态": "正常运营", "是否有接待台": "有"}
-                    ]
+                "出站口": {
+                    "北出站口": ["北出站大厅", "北出站通道"],
+                    "南出站口": ["南出站大厅", "南出站通道"],
+                    "东出站口": ["东出站大厅"]
                 },
-                "北京站": {
-                    "station_name": "北京站",
-                    "basic_info": {
-                        "省": "北京市",
-                        "市": "北京市",
-                        "区": "东城区",
-                        "街道": "建国门街道",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:00",
-                        "服务人员数量": 8,
-                        "联系电话_座机": "010-51834567",
-                        "联系电话_手机": "13700137000",
-                        "独立停车区": "有",
-                        "停车位数量": 40,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 1, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室"}
-                    ]
+                "进站口": {
+                    "北进站口": ["北进站大厅", "北安检区"],
+                    "南进站口": ["南进站大厅", "南安检区"],
+                    "西进站口": ["西进站大厅"]
                 },
-                "北京北站": {
-                    "station_name": "北京北站",
-                    "basic_info": {
-                        "省": "北京市",
-                        "市": "北京市",
-                        "区": "西城区",
-                        "街道": "德胜街道",
-                        "车站等级": "二级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "21:00",
-                        "服务人员数量": 8,
-                        "联系电话_座机": "010-51834567",
-                        "联系电话_手机": "13700137000",
-                        "独立停车区": "有",
-                        "停车位数量": 40,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 1, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区"}
-                    ]
-                }
-            },
-            "石家庄车务段": {
-                "石家庄站": {
-                    "station_name": "石家庄站",
-                    "basic_info": {
-                        "省": "河北省",
-                        "市": "石家庄市",
-                        "区": "桥西区",
-                        "街道": "中华南大街",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:30",
-                        "服务人员数量": 10,
-                        "联系电话_座机": "0311-87928888",
-                        "联系电话_手机": "13700337000",
-                        "独立停车区": "有",
-                        "停车位数量": 60,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室（南）"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室"}
-                    ]
-                }
-            },
-            "天津车务段": {
-                "天津站": {
-                    "station_name": "天津站",
-                    "basic_info": {
-                        "省": "天津市",
-                        "市": "天津市",
-                        "区": "河北区",
-                        "街道": "新纬路",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "23:00",
-                        "服务人员数量": 12,
-                        "联系电话_座机": "022-26188888",
-                        "联系电话_手机": "13800238000",
-                        "独立停车区": "有",
-                        "停车位数量": 80,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "北京铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室"}
-                    ]
-                }
-            }
-        },
-        "上海局": {
-            "上海车务段": {
-                "上海虹桥站": {
-                    "station_name": "上海虹桥站",
-                    "basic_info": {
-                        "省": "上海市",
-                        "市": "上海市",
-                        "区": "闵行区",
-                        "街道": "虹桥街道",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "05:30",
-                        "营业时间_结束": "23:30",
-                        "服务人员数量": 15,
-                        "联系电话_座机": "021-51234567",
-                        "联系电话_手机": "13700137000",
-                        "独立停车区": "有",
-                        "停车位数量": 120,
-                        "登车提醒时间": 20,
-                        "建设情况": "已建成",
-                        "出资情况": "合资",
-                        "资金来源": "专项资金",
-                        "建设单位": "上海铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 3, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 2, "name": "商业候车室"}
-                    ]
-                },
-                "杭州东站": {
-                    "station_name": "杭州东站",
-                    "basic_info": {
-                        "省": "浙江省",
-                        "市": "杭州市",
-                        "区": "江干区",
-                        "街道": "彭埠街道",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:30",
-                        "服务人员数量": 12,
-                        "联系电话_座机": "0571-56789012",
-                        "联系电话_手机": "13800138001",
-                        "独立停车区": "有",
-                        "停车位数量": 90,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "上海铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区"}
-                    ]
-                },
-                "南京南站": {
-                    "station_name": "南京南站",
-                    "basic_info": {
-                        "省": "江苏省",
-                        "市": "南京市",
-                        "区": "雨花台区",
-                        "街道": "玉兰路",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:00",
-                        "服务人员数量": 14,
-                        "联系电话_座机": "025-58800000",
-                        "联系电话_手机": "13900139001",
-                        "独立停车区": "有",
-                        "停车位数量": 100,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "上海铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室"}
-                    ]
-                }
-            }
-        },
-        "成都局": {
-            "成都车务段": {
-                "成都东站": {
-                    "station_name": "成都东站",
-                    "basic_info": {
-                        "省": "四川省",
-                        "市": "成都市",
-                        "区": "成华区",
-                        "街道": "保和街道",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:30",
-                        "营业时间_结束": "22:30",
-                        "服务人员数量": 8,
-                        "联系电话_座机": "028-86451234",
-                        "联系电话_手机": "13600136000",
-                        "独立停车区": "有",
-                        "停车位数量": 60,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "成都铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 2, "name": "商务座候车区"},
-                        {"type": "商业候车室", "count": 1, "name": "商业候车室"}
-                    ]
-                }
-            },
-            "重庆车务段": {
-                "重庆北站": {
-                    "station_name": "重庆北站",
-                    "basic_info": {
-                        "省": "重庆市",
-                        "市": "重庆市",
-                        "区": "渝北区",
-                        "街道": "龙头寺",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "06:00",
-                        "营业时间_结束": "22:00",
-                        "服务人员数量": 10,
-                        "联系电话_座机": "023-61850000",
-                        "联系电话_手机": "13700137001",
-                        "独立停车区": "有",
-                        "停车位数量": 70,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "成都铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 2, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区"}
-                    ]
-                }
-            },
-            "贵阳车务段": {
-                "贵阳北站": {
-                    "station_name": "贵阳北站",
-                    "basic_info": {
-                        "省": "贵州省",
-                        "市": "贵阳市",
-                        "区": "观山湖区",
-                        "街道": "阳关大道",
-                        "车站等级": "一级",
-                        "商务候车室类型": "商务候车室",
-                        "专用进站通道": "有",
-                        "专用出站通道": "有",
-                        "有wifi": "有",
-                        "营业时间_开始": "07:00",
-                        "营业时间_结束": "21:30",
-                        "服务人员数量": 8,
-                        "联系电话_座机": "0851-88180000",
-                        "联系电话_手机": "13800138002",
-                        "独立停车区": "有",
-                        "停车位数量": 50,
-                        "登车提醒时间": 15,
-                        "建设情况": "已建成",
-                        "出资情况": "路局出资",
-                        "资金来源": "专项资金",
-                        "建设单位": "成都铁路建设集团"
-                    },
-                    "open_areas": [],
-                    "large_halls": [],
-                    "medium_halls": [],
-                    "small_halls": [],
-                    "meeting_rooms": [],
-                    "waiting_rooms": [
-                        {"type": "商务候车室", "count": 1, "name": "商务候车室"},
-                        {"type": "商务座候车区", "count": 1, "name": "商务座候车区"}
-                    ]
+                "换乘大厅": {
+                    "地铁换乘区": ["地铁换乘通道", "地铁换乘大厅"],
+                    "公交换乘区": ["公交候车区", "公交上客区"]
                 }
             }
         }
-    }
-}
-
-current_station = ""
-current_path = {"railway": "国铁集团", "bureau": "北京局", "section": "北京车务段", "station": "北京南站"}
-
-# ID计数器
-id_counters = {}
-
-
-def init_counters_for_station(station_key):
-    if station_key not in id_counters:
-        id_counters[station_key] = {"open_areas": 1, "large_halls": 1, "medium_halls": 1, "small_halls": 1,
-                                    "meeting_rooms": 1}
-
-
-def get_station_by_path(railway, bureau, section, station):
-    try:
-        return railway_data[railway][bureau][section][station]
-    except:
-        return None
-
-
-def set_current_station_by_path(railway, bureau, section, station):
-    global current_station, current_path
-    current_path = {"railway": railway, "bureau": bureau, "section": section, "station": station}
-    current_station = station
-
-
-def init_sample_data():
-    # 为北京南站添加示例设施数据
-    station = railway_data["国铁集团"]["北京局"]["北京车务段"]["北京南站"]
-    init_counters_for_station("北京南站")
-
-    station["open_areas"] = [
-        {"id": 1, "name": "VIP贵宾休息区", "area": 150, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 25,
-         "seat_count": 50, "price": 128, "position": "南侧2层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京南站", "fee_standard": "128元/人/次", "contract_end_date": "2026-12-31",
-         "contract_amount": 500000, "has_naming": "是", "naming_unit": "中国银行"},
-        {"id": 2, "name": "商务精英区", "area": 100, "has_toilet": "有", "has_kitchen": "无", "sofa_count": 15,
-         "seat_count": 35, "price": 88, "position": "北侧1层", "door_photo": "", "business_mode": "合作",
-         "business_subject": "北京商务服务公司", "fee_standard": "88元/人/次", "contract_end_date": "2025-12-31",
-         "contract_amount": 300000, "has_naming": "否", "naming_unit": ""},
-    ]
-    station["large_halls"] = [
-        {"id": 1, "name": "大型商务厅A", "area": 200, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 40,
-         "seat_count": 80, "price_per_hour": 300, "position": "东侧3层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京南站", "fee_standard": "300元/小时", "contract_end_date": "2026-06-30",
-         "contract_amount": 800000, "has_naming": "是", "naming_unit": "华为"},
-    ]
-    station["medium_halls"] = [
-        {"id": 1, "name": "中型会议室厅", "area": 120, "has_toilet": "有", "has_kitchen": "无", "sofa_count": 20,
-         "seat_count": 45, "price_per_hour": 180, "position": "西侧2层", "door_photo": "", "business_mode": "委托服务",
-         "business_subject": "北京会议服务公司", "fee_standard": "180元/小时", "contract_end_date": "2025-10-31",
-         "contract_amount": 200000, "has_naming": "否", "naming_unit": ""},
-    ]
-    station["small_halls"] = [
-        {"id": 1, "name": "小型私密厅", "area": 60, "has_toilet": "有", "has_kitchen": "无", "sofa_count": 10,
-         "seat_count": 20, "price_per_hour": 100, "position": "南侧1层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京南站", "fee_standard": "100元/小时", "contract_end_date": "2026-12-31",
-         "contract_amount": 150000, "has_naming": "否", "naming_unit": ""},
-    ]
-    station["meeting_rooms"] = [
-        {"id": 1, "name": "董事会议室", "area": 80, "has_toilet": "有", "has_kitchen": "有", "seat_count": 25,
-         "price_per_hour": 250, "position": "中央5层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京南站", "fee_standard": "250元/小时", "contract_end_date": "2027-06-30",
-         "contract_amount": 350000, "has_naming": "是", "naming_unit": "招商银行"},
-    ]
-    id_counters["北京南站"] = {"open_areas": 3, "large_halls": 2, "medium_halls": 2, "small_halls": 2,
-                               "meeting_rooms": 2}
-
-    # 为北京西站添加示例设施数据
-    station2 = railway_data["国铁集团"]["北京局"]["北京车务段"]["北京西站"]
-    init_counters_for_station("北京西站")
-    station2["open_areas"] = [
-        {"id": 1, "name": "VIP休息区", "area": 120, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 20,
-         "seat_count": 40, "price": 108, "position": "南侧2层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京西站", "fee_standard": "108元/人/次", "contract_end_date": "2026-12-31",
-         "contract_amount": 400000, "has_naming": "是", "naming_unit": "工商银行"},
-    ]
-    station2["large_halls"] = [
-        {"id": 1, "name": "大型商务厅", "area": 180, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 35,
-         "seat_count": 70, "price_per_hour": 280, "position": "东侧3层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "北京西站", "fee_standard": "280元/小时", "contract_end_date": "2026-06-30",
-         "contract_amount": 700000, "has_naming": "是", "naming_unit": "华为"},
-    ]
-
-    # 为石家庄站添加示例数据
-    station_shijiazhuang = railway_data["国铁集团"]["北京局"]["石家庄车务段"]["石家庄站"]
-    init_counters_for_station("石家庄站")
-    station_shijiazhuang["open_areas"] = [
-        {"id": 1, "name": "VIP休息区", "area": 100, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 18,
-         "seat_count": 35, "price": 98, "position": "南侧2层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "石家庄站", "fee_standard": "98元/人/次", "contract_end_date": "2026-12-31",
-         "contract_amount": 350000, "has_naming": "是", "naming_unit": "农业银行"},
-    ]
-
-    # 为天津站添加示例数据
-    station_tianjin = railway_data["国铁集团"]["北京局"]["天津车务段"]["天津站"]
-    init_counters_for_station("天津站")
-    station_tianjin["open_areas"] = [
-        {"id": 1, "name": "商务休息区", "area": 130, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 22,
-         "seat_count": 45, "price": 118, "position": "北侧2层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "天津站", "fee_standard": "118元/人/次", "contract_end_date": "2026-12-31",
-         "contract_amount": 450000, "has_naming": "是", "naming_unit": "交通银行"},
-    ]
-
-    # 为上海虹桥站添加示例数据
-    station_shanghai = railway_data["国铁集团"]["上海局"]["上海车务段"]["上海虹桥站"]
-    init_counters_for_station("上海虹桥站")
-    station_shanghai["open_areas"] = [
-        {"id": 1, "name": "VIP贵宾区", "area": 200, "has_toilet": "有", "has_kitchen": "有", "sofa_count": 30,
-         "seat_count": 60, "price": 158, "position": "南侧2层", "door_photo": "", "business_mode": "自营",
-         "business_subject": "上海虹桥站", "fee_standard": "158元/人/次", "contract_end_date": "2026-12-31",
-         "contract_amount": 600000, "has_naming": "是", "naming_unit": "建设银行"},
-    ]
-
-
-# ==================== 图片上传API ====================
-@app.route('/api/upload_photo', methods=['POST'])
-def upload_photo():
-    if 'photo' not in request.files:
-        return jsonify({"status": "error", "message": "没有文件"})
-    file = request.files['photo']
-    if file.filename == '':
-        return jsonify({"status": "error", "message": "文件名为空"})
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{timestamp}_{filename}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        return jsonify({"status": "success", "url": f"/static/uploads/{filename}"})
-    return jsonify({"status": "error", "message": "文件类型不支持"})
-
-
-# ==================== Excel导出功能 ====================
-@app.route('/api/export_all_excel')
-def export_all_excel():
-    output = BytesIO()
-    all_data = []
-
-    for railway, bureaus in railway_data.items():
-        for bureau, sections in bureaus.items():
-            for section, stations in sections.items():
-                for station_name, station in stations.items():
-                    basic = station['basic_info']
-
-                    for area in station['open_areas']:
-                        all_data.append({
-                            '国铁': railway, '路局': bureau, '站段': section, '车站名称': station_name,
-                            '省份': basic.get('省', ''), '城市': basic.get('市', ''), '区县': basic.get('区', ''),
-                            '街道': basic.get('街道', ''),
-                            '车站等级': basic.get('车站等级', ''), '商务候车室类型': basic.get('商务候车室类型', ''),
-                            '专用进站通道': basic.get('专用进站通道', ''),
-                            '专用出站通道': basic.get('专用出站通道', ''),
-                            '有wifi': basic.get('有wifi', ''),
-                            '营业时间': f"{basic.get('营业时间_开始', '')}-{basic.get('营业时间_结束', '')}",
-                            '服务人员数量': basic.get('服务人员数量', ''), '联系电话': basic.get('联系电话_座机', ''),
-                            '独立停车区': basic.get('独立停车区', ''), '停车位数量': basic.get('停车位数量', ''),
-                            '登车提醒时间': basic.get('登车提醒时间', ''), '建设情况': basic.get('建设情况', ''),
-                            '出资情况': basic.get('出资情况', ''), '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''), '设施类型': '开放休息区',
-                            '设施名称': area['name'], '面积(㎡)': area['area'], '是否有卫生间': area['has_toilet'],
-                            '是否有操作间': area['has_kitchen'], '沙发数量': area.get('sofa_count', ''),
-                            '座位数量': area['seat_count'], '价格': f"{area['price']}元/人/次",
-                            '位置': area.get('position', ''), '经营模式': area.get('business_mode', ''),
-                            '经营主体': area.get('business_subject', ''), '经营收费标准': area.get('fee_standard', ''),
-                            '合同到期时间': area.get('contract_end_date', ''),
-                            '合同金额': area.get('contract_amount', ''),
-                            '是否有冠名候车室': area.get('has_naming', ''), '冠名单位': area.get('naming_unit', '')
-                        })
-
-                    for hall in station['large_halls']:
-                        all_data.append({
-                            '国铁': railway, '路局': bureau, '站段': section, '车站名称': station_name,
-                            '省份': basic.get('省', ''), '城市': basic.get('市', ''), '区县': basic.get('区', ''),
-                            '街道': basic.get('街道', ''),
-                            '车站等级': basic.get('车站等级', ''), '商务候车室类型': basic.get('商务候车室类型', ''),
-                            '专用进站通道': basic.get('专用进站通道', ''),
-                            '专用出站通道': basic.get('专用出站通道', ''),
-                            '有wifi': basic.get('有wifi', ''),
-                            '营业时间': f"{basic.get('营业时间_开始', '')}-{basic.get('营业时间_结束', '')}",
-                            '服务人员数量': basic.get('服务人员数量', ''), '联系电话': basic.get('联系电话_座机', ''),
-                            '独立停车区': basic.get('独立停车区', ''), '停车位数量': basic.get('停车位数量', ''),
-                            '登车提醒时间': basic.get('登车提醒时间', ''), '建设情况': basic.get('建设情况', ''),
-                            '出资情况': basic.get('出资情况', ''), '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''), '设施类型': '大型休息厅',
-                            '设施名称': hall['name'], '面积(㎡)': hall['area'], '是否有卫生间': hall['has_toilet'],
-                            '是否有操作间': hall['has_kitchen'], '沙发数量': hall.get('sofa_count', ''),
-                            '座位数量': hall['seat_count'], '价格': f"{hall['price_per_hour']}元/小时",
-                            '位置': hall.get('position', ''), '经营模式': hall.get('business_mode', ''),
-                            '经营主体': hall.get('business_subject', ''), '经营收费标准': hall.get('fee_standard', ''),
-                            '合同到期时间': hall.get('contract_end_date', ''),
-                            '合同金额': hall.get('contract_amount', ''),
-                            '是否有冠名候车室': hall.get('has_naming', ''), '冠名单位': hall.get('naming_unit', '')
-                        })
-
-                    for hall in station['medium_halls']:
-                        all_data.append({
-                            '国铁': railway, '路局': bureau, '站段': section, '车站名称': station_name,
-                            '省份': basic.get('省', ''), '城市': basic.get('市', ''), '区县': basic.get('区', ''),
-                            '街道': basic.get('街道', ''),
-                            '车站等级': basic.get('车站等级', ''), '商务候车室类型': basic.get('商务候车室类型', ''),
-                            '专用进站通道': basic.get('专用进站通道', ''),
-                            '专用出站通道': basic.get('专用出站通道', ''),
-                            '有wifi': basic.get('有wifi', ''),
-                            '营业时间': f"{basic.get('营业时间_开始', '')}-{basic.get('营业时间_结束', '')}",
-                            '服务人员数量': basic.get('服务人员数量', ''), '联系电话': basic.get('联系电话_座机', ''),
-                            '独立停车区': basic.get('独立停车区', ''), '停车位数量': basic.get('停车位数量', ''),
-                            '登车提醒时间': basic.get('登车提醒时间', ''), '建设情况': basic.get('建设情况', ''),
-                            '出资情况': basic.get('出资情况', ''), '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''), '设施类型': '中型休息厅',
-                            '设施名称': hall['name'], '面积(㎡)': hall['area'], '是否有卫生间': hall['has_toilet'],
-                            '是否有操作间': hall['has_kitchen'], '沙发数量': hall.get('sofa_count', ''),
-                            '座位数量': hall['seat_count'], '价格': f"{hall['price_per_hour']}元/小时",
-                            '位置': hall.get('position', ''), '经营模式': hall.get('business_mode', ''),
-                            '经营主体': hall.get('business_subject', ''), '经营收费标准': hall.get('fee_standard', ''),
-                            '合同到期时间': hall.get('contract_end_date', ''),
-                            '合同金额': hall.get('contract_amount', ''),
-                            '是否有冠名候车室': hall.get('has_naming', ''), '冠名单位': hall.get('naming_unit', '')
-                        })
-
-                    for hall in station['small_halls']:
-                        all_data.append({
-                            '国铁': railway, '路局': bureau, '站段': section, '车站名称': station_name,
-                            '省份': basic.get('省', ''), '城市': basic.get('市', ''), '区县': basic.get('区', ''),
-                            '街道': basic.get('街道', ''),
-                            '车站等级': basic.get('车站等级', ''), '商务候车室类型': basic.get('商务候车室类型', ''),
-                            '专用进站通道': basic.get('专用进站通道', ''),
-                            '专用出站通道': basic.get('专用出站通道', ''),
-                            '有wifi': basic.get('有wifi', ''),
-                            '营业时间': f"{basic.get('营业时间_开始', '')}-{basic.get('营业时间_结束', '')}",
-                            '服务人员数量': basic.get('服务人员数量', ''), '联系电话': basic.get('联系电话_座机', ''),
-                            '独立停车区': basic.get('独立停车区', ''), '停车位数量': basic.get('停车位数量', ''),
-                            '登车提醒时间': basic.get('登车提醒时间', ''), '建设情况': basic.get('建设情况', ''),
-                            '出资情况': basic.get('出资情况', ''), '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''), '设施类型': '小型休息厅',
-                            '设施名称': hall['name'], '面积(㎡)': hall['area'], '是否有卫生间': hall['has_toilet'],
-                            '是否有操作间': hall['has_kitchen'], '沙发数量': hall.get('sofa_count', ''),
-                            '座位数量': hall['seat_count'], '价格': f"{hall['price_per_hour']}元/小时",
-                            '位置': hall.get('position', ''), '经营模式': hall.get('business_mode', ''),
-                            '经营主体': hall.get('business_subject', ''), '经营收费标准': hall.get('fee_standard', ''),
-                            '合同到期时间': hall.get('contract_end_date', ''),
-                            '合同金额': hall.get('contract_amount', ''),
-                            '是否有冠名候车室': hall.get('has_naming', ''), '冠名单位': hall.get('naming_unit', '')
-                        })
-
-                    for room in station['meeting_rooms']:
-                        all_data.append({
-                            '国铁': railway, '路局': bureau, '站段': section, '车站名称': station_name,
-                            '省份': basic.get('省', ''), '城市': basic.get('市', ''), '区县': basic.get('区', ''),
-                            '街道': basic.get('街道', ''),
-                            '车站等级': basic.get('车站等级', ''), '商务候车室类型': basic.get('商务候车室类型', ''),
-                            '专用进站通道': basic.get('专用进站通道', ''),
-                            '专用出站通道': basic.get('专用出站通道', ''),
-                            '有wifi': basic.get('有wifi', ''),
-                            '营业时间': f"{basic.get('营业时间_开始', '')}-{basic.get('营业时间_结束', '')}",
-                            '服务人员数量': basic.get('服务人员数量', ''), '联系电话': basic.get('联系电话_座机', ''),
-                            '独立停车区': basic.get('独立停车区', ''), '停车位数量': basic.get('停车位数量', ''),
-                            '登车提醒时间': basic.get('登车提醒时间', ''), '建设情况': basic.get('建设情况', ''),
-                            '出资情况': basic.get('出资情况', ''), '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''), '设施类型': '会议室',
-                            '设施名称': room['name'], '面积(㎡)': room['area'], '是否有卫生间': room['has_toilet'],
-                            '是否有操作间': room['has_kitchen'], '沙发数量': '', '座位数量': room['seat_count'],
-                            '价格': f"{room['price_per_hour']}元/小时",
-                            '位置': room.get('position', ''), '经营模式': room.get('business_mode', ''),
-                            '经营主体': room.get('business_subject', ''), '经营收费标准': room.get('fee_standard', ''),
-                            '合同到期时间': room.get('contract_end_date', ''),
-                            '合同金额': room.get('contract_amount', ''),
-                            '是否有冠名候车室': room.get('has_naming', ''), '冠名单位': room.get('naming_unit', '')
-                        })
-
-    df = pd.DataFrame(all_data)
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='车站设施数据汇总', index=False)
-    output.seek(0)
-    return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                     as_attachment=True,
-                     download_name=f"车站设施数据汇总_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-
-
-# ==================== API路由 ====================
-@app.route('/api/get_tree_data')
-def get_tree_data():
-    """获取树形结构数据"""
-    return jsonify(railway_data)
-
-
-@app.route('/api/get_station_list')
-def get_station_list():
-    """获取当前选中节点下的所有车站列表"""
-    import json
-    path = request.args.get('path', '[]')
-    node_type = request.args.get('type', 'railway')
-    
-    try:
-        path = json.loads(path)
-    except:
-        path = []
-    
-    stations = []
-    
-    if len(path) == 0:
-        return jsonify(stations)
-    
-    try:
-        data = railway_data
-        for node in path:
-            if node in data:
-                data = data[node]
-            else:
-                return jsonify(stations)
-        
-        if node_type == 'station':
-            stations.append({
-                'railway': path[0],
-                'bureau': path[1],
-                'section': path[2],
-                'station': path[3]
-            })
-        elif node_type == 'section':
-            for station in data:
-                stations.append({
-                    'railway': path[0],
-                    'bureau': path[1],
-                    'section': path[2],
-                    'station': station
-                })
-        elif node_type == 'bureau':
-            for section in data:
-                for station in data[section]:
-                    stations.append({
-                        'railway': path[0],
-                        'bureau': path[1],
-                        'section': section,
-                        'station': station
-                    })
-        else:
-            for bureau in data:
-                for section in data[bureau]:
-                    for station in data[bureau][section]:
-                        stations.append({
-                            'railway': path[0],
-                            'bureau': bureau,
-                            'section': section,
-                            'station': station
-                        })
-    except Exception as e:
-        print(f"Error getting station list: {e}")
-    
-    return jsonify(stations)
-
-@app.route('/api/get_station_data')
-def get_station_data():
-    """获取当前选中车站的数据"""
-    railway = request.args.get('railway', '国铁集团')
-    bureau = request.args.get('bureau', '北京局')
-    section = request.args.get('section', '北京车务段')
-    station = request.args.get('station', '北京南站')
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        return jsonify(station_data)
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/add_open_area', methods=['POST'])
-def add_open_area():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_key = f"{railway}_{bureau}_{section}_{station}"
-        init_counters_for_station(station_key)
-        new_item = data.get('item', {})
-        new_item['id'] = id_counters[station_key]['open_areas']
-        id_counters[station_key]['open_areas'] += 1
-        station_data['open_areas'].append(new_item)
-        return jsonify({"status": "success", "id": new_item['id']})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_open_area/<int:item_id>', methods=['PUT'])
-def update_open_area(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        for i, item in enumerate(station_data['open_areas']):
-            if item['id'] == item_id:
-                data['id'] = item_id
-                station_data['open_areas'][i] = data
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/delete_open_area/<int:item_id>', methods=['DELETE'])
-def delete_open_area(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['open_areas'] = [item for item in station_data['open_areas'] if item['id'] != item_id]
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-# 大型休息厅API
-@app.route('/api/add_large_hall', methods=['POST'])
-def add_large_hall():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_key = f"{railway}_{bureau}_{section}_{station}"
-        init_counters_for_station(station_key)
-        new_item = data.get('item', {})
-        new_item['id'] = id_counters[station_key]['large_halls']
-        id_counters[station_key]['large_halls'] += 1
-        station_data['large_halls'].append(new_item)
-        return jsonify({"status": "success", "id": new_item['id']})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_large_hall/<int:item_id>', methods=['PUT'])
-def update_large_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        for i, item in enumerate(station_data['large_halls']):
-            if item['id'] == item_id:
-                data['id'] = item_id
-                station_data['large_halls'][i] = data
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/delete_large_hall/<int:item_id>', methods=['DELETE'])
-def delete_large_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['large_halls'] = [item for item in station_data['large_halls'] if item['id'] != item_id]
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-# 中型休息厅API
-@app.route('/api/add_medium_hall', methods=['POST'])
-def add_medium_hall():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_key = f"{railway}_{bureau}_{section}_{station}"
-        init_counters_for_station(station_key)
-        new_item = data.get('item', {})
-        new_item['id'] = id_counters[station_key]['medium_halls']
-        id_counters[station_key]['medium_halls'] += 1
-        station_data['medium_halls'].append(new_item)
-        return jsonify({"status": "success", "id": new_item['id']})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_medium_hall/<int:item_id>', methods=['PUT'])
-def update_medium_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        for i, item in enumerate(station_data['medium_halls']):
-            if item['id'] == item_id:
-                data['id'] = item_id
-                station_data['medium_halls'][i] = data
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/delete_medium_hall/<int:item_id>', methods=['DELETE'])
-def delete_medium_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['medium_halls'] = [item for item in station_data['medium_halls'] if item['id'] != item_id]
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-# 小型休息厅API
-@app.route('/api/add_small_hall', methods=['POST'])
-def add_small_hall():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_key = f"{railway}_{bureau}_{section}_{station}"
-        init_counters_for_station(station_key)
-        new_item = data.get('item', {})
-        new_item['id'] = id_counters[station_key]['small_halls']
-        id_counters[station_key]['small_halls'] += 1
-        station_data['small_halls'].append(new_item)
-        return jsonify({"status": "success", "id": new_item['id']})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_small_hall/<int:item_id>', methods=['PUT'])
-def update_small_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        for i, item in enumerate(station_data['small_halls']):
-            if item['id'] == item_id:
-                data['id'] = item_id
-                station_data['small_halls'][i] = data
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/delete_small_hall/<int:item_id>', methods=['DELETE'])
-def delete_small_hall(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['small_halls'] = [item for item in station_data['small_halls'] if item['id'] != item_id]
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-# 会议室API
-@app.route('/api/add_meeting_room', methods=['POST'])
-def add_meeting_room():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_key = f"{railway}_{bureau}_{section}_{station}"
-        init_counters_for_station(station_key)
-        new_item = data.get('item', {})
-        new_item['id'] = id_counters[station_key]['meeting_rooms']
-        id_counters[station_key]['meeting_rooms'] += 1
-        station_data['meeting_rooms'].append(new_item)
-        return jsonify({"status": "success", "id": new_item['id']})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_meeting_room/<int:item_id>', methods=['PUT'])
-def update_meeting_room(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        for i, item in enumerate(station_data['meeting_rooms']):
-            if item['id'] == item_id:
-                data['id'] = item_id
-                station_data['meeting_rooms'][i] = data
-                return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/delete_meeting_room/<int:item_id>', methods=['DELETE'])
-def delete_meeting_room(item_id):
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['meeting_rooms'] = [item for item in station_data['meeting_rooms'] if item['id'] != item_id]
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/update_basic', methods=['POST'])
-def update_basic():
-    data = request.json
-    railway = data.get('railway', current_path['railway'])
-    bureau = data.get('bureau', current_path['bureau'])
-    section = data.get('section', current_path['section'])
-    station = data.get('station', current_path['station'])
-
-    station_data = get_station_by_path(railway, bureau, section, station)
-    if station_data:
-        station_data['basic_info'] = data.get('basic_info', {})
-        return jsonify({"status": "success"})
-    return jsonify({"status": "error"}), 404
-
-
-@app.route('/api/get_current_path', methods=['GET'])
-def get_current_path():
-    return jsonify(current_path)
-
-
-@app.route('/api/set_current_path', methods=['POST'])
-def set_current_path():
-    data = request.json
-    global current_path
-    current_path = data
-    return jsonify({"status": "success"})
-
-
-# ==================== 路由 ====================
-@app.route('/')
-def main_page():
-    init_sample_data()
-    return render_template('main.html')
-
-
-@app.route('/edit')
-def edit_page():
-    init_sample_data()
-    return render_template('edit.html')
-
-
-@app.route('/statistics')
-def statistics_page():
-    """统计页面"""
-    init_sample_data()
-    return render_template('statistics.html')
-
-
-
-@app.route('/export')
-def export_page():
-    """导出页面"""
-    return render_template('export.html')
-
-
-@app.route('/api/export_data')
-def export_data():
-    """通用数据导出API - 支持车站基础信息、候车室信息、设施明细的完整导出"""
-    data_types = request.args.get('data_types', 'all').split(',')
-    export_format = request.args.get('format', 'xlsx')
-    level_filter = request.args.get('level', '')
-    room_type_filter = request.args.get('room_type', '')
-    facility_type_filter = request.args.get('facility_type', '')
-    scope = request.args.get('scope', 'all')
-    path_filter = request.args.get('path', '')
-
-    all_data = []
-
-    path_list = path_filter.split('/') if path_filter else []
-    for railway, bureaus in railway_data.items():
-        if path_list and path_list[0] and path_list[0] != railway:
-            continue
-        for bureau, sections in bureaus.items():
-            if path_list and len(path_list) > 1 and path_list[1] and path_list[1] != bureau:
+        logger.info(f"区域层级初始化完成")
+
+    def init_mock_devices(self):
+        """初始化模拟拾音器 - 每个区域绑定2-3个传感器"""
+        device_counter = 1
+        devices_config = [
+            # 候车室区域 - A2、A3检票口区域绑定2个传感器
+            ("候车室", "A区检票口", "A2、A3检票口", "候车室-A2检票口传感器"),
+            ("候车室", "A区检票口", "A2、A3检票口", "候车室-A3检票口传感器"),
+            # 候车室 - A7、A8检票口区域绑定2个传感器
+            ("候车室", "A区检票口", "A7、A8检票口", "候车室-A7检票口传感器"),
+            ("候车室", "A区检票口", "A7、A8检票口", "候车室-A8检票口传感器"),
+            # 候车室 - A12、A13检票口区域绑定2个传感器
+            ("候车室", "A区检票口", "A12、A13检票口", "候车室-A12检票口传感器"),
+            ("候车室", "A区检票口", "A12、A13检票口", "候车室-A13检票口传感器"),
+            # 候车室 - B1检票口区域绑定1个传感器
+            ("候车室", "B区检票口", "B1检票口", "候车室-B1检票口传感器"),
+            # 候车室 - B5、B6检票口区域绑定2个传感器
+            ("候车室", "B区检票口", "B5、B6检票口", "候车室-B5检票口传感器"),
+            ("候车室", "B区检票口", "B5、B6检票口", "候车室-B6检票口传感器"),
+            # 候车室 - B14、B15检票口区域绑定2个传感器
+            ("候车室", "B区检票口", "B14、B15检票口", "候车室-B14检票口传感器"),
+            ("候车室", "B区检票口", "B14、B15检票口", "候车室-B15检票口传感器"),
+            # 出站口 - 北出站大厅绑定2个传感器
+            ("出站口", "北出站口", "北出站大厅", "北出站大厅-东侧传感器"),
+            ("出站口", "北出站口", "北出站大厅", "北出站大厅-西侧传感器"),
+            # 出站口 - 北出站通道绑定1个传感器
+            ("出站口", "北出站口", "北出站通道", "北出站通道传感器"),
+            # 出站口 - 南出站大厅绑定2个传感器
+            ("出站口", "南出站口", "南出站大厅", "南出站大厅-东侧传感器"),
+            ("出站口", "南出站口", "南出站大厅", "南出站大厅-西侧传感器"),
+            # 出站口 - 东出站大厅绑定1个传感器
+            ("出站口", "东出站口", "东出站大厅", "东出站大厅传感器"),
+            # 进站口 - 北进站大厅绑定2个传感器
+            ("进站口", "北进站口", "北进站大厅", "北进站大厅-1号通道传感器"),
+            ("进站口", "北进站口", "北进站大厅", "北进站大厅-2号通道传感器"),
+            # 进站口 - 北安检区绑定1个传感器
+            ("进站口", "北进站口", "北安检区", "北安检区传感器"),
+            # 进站口 - 南进站大厅绑定2个传感器
+            ("进站口", "南进站口", "南进站大厅", "南进站大厅-1号通道传感器"),
+            ("进站口", "南进站口", "南进站大厅", "南进站大厅-2号通道传感器"),
+            # 进站口 - 西进站大厅绑定1个传感器
+            ("进站口", "西进站口", "西进站大厅", "西进站大厅传感器"),
+            # 换乘大厅 - 地铁换乘通道绑定2个传感器
+            ("换乘大厅", "地铁换乘区", "地铁换乘通道", "地铁换乘通道-北侧传感器"),
+            ("换乘大厅", "地铁换乘区", "地铁换乘通道", "地铁换乘通道-南侧传感器"),
+            # 换乘大厅 - 地铁换乘大厅绑定2个传感器
+            ("换乘大厅", "地铁换乘区", "地铁换乘大厅", "地铁换乘大厅-中央传感器"),
+            ("换乘大厅", "地铁换乘区", "地铁换乘大厅", "地铁换乘大厅-出口传感器"),
+        ]
+
+        for level2, level3, level4, device_name in devices_config:
+            device_id = f"MIC_{device_counter:03d}"
+
+            # 随机状态（大部分在线）
+            status_choice = [DeviceStatus.ONLINE] * 8 + [DeviceStatus.OFFLINE, DeviceStatus.ALERT]
+            status = status_choice[device_counter % len(status_choice)]
+
+            device = Device(
+                id=device_id,
+                name=device_name,
+                station="重庆东站",
+                area_level2=level2,
+                area_level3=level3,
+                area_level4=level4,
+                status=status,
+                ip=f"192.168.{device_counter // 256}.{device_counter % 256}",
+                mac=f"00:15:5d:{device_counter:02x}:{(device_counter+1):02x}:{(device_counter+2):02x}",
+                last_heartbeat=datetime.datetime.now()
+            )
+
+            self.devices[device_id] = device
+            self.device_volumes[device_id] = 0  # 默认音量为0
+
+            # 保存到数据库
+            self.cursor.execute('''
+                INSERT INTO devices 
+                (device_id, device_name, station, area_level2, area_level3, area_level4, 
+                 status, ip, mac, last_heartbeat)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (device_id, device.name, device.station, device.area_level2,
+                  device.area_level3, device.area_level4, device.status.value,
+                  device.ip, device.mac, device.last_heartbeat))
+
+            device_counter += 1
+
+        self.conn.commit()
+        logger.info(f"初始化了 {len(self.devices)} 个拾音器")
+
+    def init_mock_recordings_reduced(self):
+        """初始化模拟录音数据 - 减少数据量以提高性能"""
+        now = datetime.datetime.now()
+        mock_recordings = []
+
+        # 为每个拾音器生成录音数据（只生成最近7天，而不是30天）
+        for device in self.devices.values():
+            if device.status == DeviceStatus.OFFLINE:
                 continue
-            for section, stations in sections.items():
-                if path_list and len(path_list) > 2 and path_list[2] and path_list[2] != section:
+
+            # 为每个传感器生成最近7天的整体录音（每天一段）
+            for day_offset in range(7):
+                # 每天生成一段整体录音
+                start_hour = random.randint(6, 8)
+                start_minute = random.randint(0, 59)
+                start_second = random.randint(0, 59)
+
+                start_time = now - datetime.timedelta(days=day_offset, hours=24-start_hour, minutes=-start_minute, seconds=-start_second)
+                # 录音时长 1-3小时（减少时长）
+                duration = random.randint(3600, 10800)
+                end_time = start_time + datetime.timedelta(seconds=duration)
+
+                avg_volume = random.randint(55, 85)
+                file_size = int(duration * 32 * 1024)
+
+                record_id = f"REC_{uuid.uuid4().hex[:8]}"
+                filename = f"{device.id}_{start_time.strftime('%Y%m%d_%H%M%S')}.wav"
+                filepath = str(self.recording_dir / filename)
+
+                mock_recordings.append({
+                    'record_id': record_id,
+                    'device_id': device.id,
+                    'device_name': device.name,
+                    'area_level2': device.area_level2,
+                    'area_level3': device.area_level3,
+                    'area_level4': device.area_level4,
+                    'filename': filename,
+                    'filepath': filepath,
+                    'start_time': start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'end_time': end_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'duration': duration,
+                    'file_size': file_size,
+                    'avg_volume': avg_volume
+                })
+
+        # 批量插入数据库
+        inserted = 0
+        for rec in mock_recordings:
+            try:
+                self.cursor.execute('''
+                    INSERT INTO recordings 
+                    (record_id, device_id, device_name, area_level2, area_level3, area_level4, 
+                     filename, filepath, start_time, end_time, duration, file_size, avg_volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (rec['record_id'], rec['device_id'], rec['device_name'],
+                      rec['area_level2'], rec['area_level3'], rec['area_level4'],
+                      rec['filename'], rec['filepath'], rec['start_time'], rec['end_time'],
+                      rec['duration'], rec['file_size'], rec['avg_volume']))
+                inserted += 1
+            except Exception as e:
+                logger.error(f"插入录音失败: {e}")
+
+        self.conn.commit()
+        logger.info(f"初始化了 {inserted} 条模拟录音数据")
+
+    def init_mock_recordings(self):
+        """初始化模拟录音数据 - 兼容旧调用"""
+        self.init_mock_recordings_reduced()
+
+    def init_area_bindings(self):
+        """初始化区域绑定 - 每个区域绑定2-3个传感器"""
+        bindings_created = 0
+        self.area_bindings.clear()
+
+        # 手动配置每个区域绑定的传感器
+        bindings_config = [
+            # 候车室区域
+            ("重庆东站", "候车室", "A区检票口", "A2、A3检票口", ["MIC_001", "MIC_002"]),
+            ("重庆东站", "候车室", "A区检票口", "A7、A8检票口", ["MIC_003", "MIC_004"]),
+            ("重庆东站", "候车室", "A区检票口", "A12、A13检票口", ["MIC_005", "MIC_006"]),
+            ("重庆东站", "候车室", "B区检票口", "B1检票口", ["MIC_007"]),
+            ("重庆东站", "候车室", "B区检票口", "B5、B6检票口", ["MIC_008", "MIC_009"]),
+            ("重庆东站", "候车室", "B区检票口", "B14、B15检票口", ["MIC_010", "MIC_011"]),
+            # 出站口区域
+            ("重庆东站", "出站口", "北出站口", "北出站大厅", ["MIC_012", "MIC_013"]),
+            ("重庆东站", "出站口", "北出站口", "北出站通道", ["MIC_014"]),
+            ("重庆东站", "出站口", "南出站口", "南出站大厅", ["MIC_015", "MIC_016"]),
+            ("重庆东站", "出站口", "东出站口", "东出站大厅", ["MIC_017"]),
+            # 进站口区域
+            ("重庆东站", "进站口", "北进站口", "北进站大厅", ["MIC_018", "MIC_019"]),
+            ("重庆东站", "进站口", "北进站口", "北安检区", ["MIC_020"]),
+            ("重庆东站", "进站口", "南进站口", "南进站大厅", ["MIC_021", "MIC_022"]),
+            ("重庆东站", "进站口", "西进站口", "西进站大厅", ["MIC_023"]),
+            # 换乘大厅区域
+            ("重庆东站", "换乘大厅", "地铁换乘区", "地铁换乘通道", ["MIC_024", "MIC_025"]),
+            ("重庆东站", "换乘大厅", "地铁换乘区", "地铁换乘大厅", ["MIC_026", "MIC_027"]),
+        ]
+
+        for station, level2, level3, level4, device_ids in bindings_config:
+            binding_id = f"BIND_{station}_{level2}_{level3}_{level4}".replace(" ", "_")
+            binding = AreaBinding(
+                id=binding_id,
+                level1=station,
+                level2=level2,
+                level3=level3,
+                level4=level4,
+                device_ids=device_ids
+            )
+            self.area_bindings[binding_id] = binding
+
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO area_bindings 
+                (id, level1, level2, level3, level4, device_ids)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (binding_id, station, level2, level3, level4, json.dumps(device_ids)))
+            bindings_created += 1
+
+        self.conn.commit()
+        logger.info(f"初始化了 {bindings_created} 个区域绑定，每个区域绑定2-3个传感器")
+
+    def start_alert_monitor(self):
+        """启动告警监测 - 降低频率"""
+        def monitor():
+            while True:
+                time.sleep(15)  # 从5秒改为15秒
+                for device_id, device in self.devices.items():
+                    if device.status == DeviceStatus.ONLINE:
+                        if random.random() < 0.002:  # 降低变化概率
+                            if random.random() < 0.3:
+                                device.status = DeviceStatus.ALERT
+                                self.update_device_status(device_id, DeviceStatus.ALERT)
+                        elif device.status == DeviceStatus.ALERT and random.random() < 0.3:
+                            device.status = DeviceStatus.ONLINE
+                            self.update_device_status(device_id, DeviceStatus.ONLINE)
+
+        thread = threading.Thread(target=monitor, daemon=True)
+        thread.start()
+        logger.info("告警监测线程已启动")
+
+    def update_device_status(self, device_id: str, status: DeviceStatus):
+        """更新设备状态"""
+        try:
+            self.cursor.execute('''
+                UPDATE devices SET status = ? WHERE device_id = ?
+            ''', (status.value, device_id))
+            self.conn.commit()
+
+            if self.clients:
+                socketio.emit('device_status_change', {
+                    'device_id': device_id,
+                    'status': status.value
+                })
+                logger.info(f"设备 {device_id} 状态变更为 {status.value}")
+        except Exception as e:
+            logger.error(f"更新设备状态失败: {e}")
+
+    def get_area_hierarchy(self) -> Dict:
+        """获取区域层级"""
+        return self.area_data
+
+    def get_area_bindings(self) -> List[Dict]:
+        """获取区域绑定列表（带缓存）"""
+        now = time.time()
+        if self._bindings_cache and now - self._bindings_cache_time < 5:
+            return self._bindings_cache
+        
+        bindings = []
+        for binding in self.area_bindings.values():
+            device_names = []
+            for device_id in binding.device_ids:
+                if device_id in self.devices:
+                    device_names.append(self.devices[device_id].name)
+
+            bindings.append({
+                'id': binding.id,
+                'level1': binding.level1,
+                'level2': binding.level2,
+                'level3': binding.level3,
+                'device_ids': binding.device_ids,
+                'device_names': device_names,
+                'device_count': len(binding.device_ids)
+            })
+        
+        self._bindings_cache = bindings
+        self._bindings_cache_time = now
+        return bindings
+
+    def get_devices_by_area(self, level3: str = None, level4: str = None) -> List[Dict]:
+        """根据区域获取拾音器列表"""
+        devices = []
+        for device in self.devices.values():
+            if level3 and device.area_level3 != level3:
+                continue
+            if level4 and device.area_level4 != level4:
+                continue
+            devices.append({
+                'id': device.id,
+                'name': device.name,
+                'status': device.status.value,
+                'current_volume': self.device_volumes.get(device.id, 0),
+                'area_level2': device.area_level2,
+                'area_level3': device.area_level3,
+            })
+        return devices
+
+    def get_devices(self) -> List[Dict]:
+        """获取所有拾音器"""
+        devices = []
+        for device in self.devices.values():
+            devices.append({
+                'id': device.id,
+                'name': device.name,
+                'station': device.station,
+                'area_level2': device.area_level2,
+                'area_level3': device.area_level3,
+                'area_level4': device.area_level4,
+                'status': device.status.value,
+                'ip': device.ip,
+                'mac': device.mac,
+                'last_heartbeat': device.last_heartbeat.isoformat() if device.last_heartbeat else None,
+                'current_volume': self.device_volumes.get(device.id, 0)
+            })
+        return devices
+
+    @cached(timeout=2)
+    def get_recordings_by_device_and_time(self, device_name: str = None, level3: str = None,
+                                         start_time: str = None, end_time: str = None) -> List[Dict]:
+        """根据传感器名称、区域名称和时间段获取录音（每个传感器一条整体录音）"""
+        query = '''
+            SELECT r.*, d.status 
+            FROM recordings r
+            JOIN devices d ON r.device_id = d.device_id
+            WHERE 1=1
+        '''
+        params = []
+
+        if level3 and level3 != '全部' and level3 != '':
+            query += ' AND d.area_level3 = ?'
+            params.append(level3)
+
+        if device_name and device_name != '':
+            query += ' AND d.device_name LIKE ?'
+            params.append(f'%{device_name}%')
+
+        if start_time:
+            query += ' AND r.start_time >= ?'
+            params.append(start_time)
+        if end_time:
+            query += ' AND r.end_time <= ?'
+            params.append(end_time)
+
+        query += ' ORDER BY r.start_time DESC LIMIT 200'  # 限制返回数量
+
+        try:
+            self.cursor.execute(query, params)
+            records = self.cursor.fetchall()
+            columns = [description[0] for description in self.cursor.description]
+
+            device_record_map = {}
+            for rec in records:
+                device_id = rec[columns.index('device_id')]
+                if device_id not in device_record_map:
+                    device_record_map[device_id] = {
+                        'record_id': rec[columns.index('record_id')],
+                        'device_id': device_id,
+                        'device_name': rec[columns.index('device_name')],
+                        'area_level2': rec[columns.index('area_level2')],
+                        'area_level3': rec[columns.index('area_level3')],
+                        'start_time': rec[columns.index('start_time')],
+                        'end_time': rec[columns.index('end_time')],
+                        'duration': rec[columns.index('duration')],
+                        'avg_volume': rec[columns.index('avg_volume')],
+                        'status': rec[columns.index('status')] if 'status' in columns else 'online'
+                    }
+
+            return list(device_record_map.values())
+        except Exception as e:
+            logger.error(f"查询录音失败: {e}")
+            return []
+
+    @cached(timeout=2)
+    def get_recordings_by_time_range_with_segments(self, device_name: str = None, level3: str = None,
+                                                     start_time: str = None, end_time: str = None) -> List[Dict]:
+        """获取指定时间段内的所有录音片段"""
+        query = '''
+            SELECT r.*, d.status 
+            FROM recordings r
+            JOIN devices d ON r.device_id = d.device_id
+            WHERE 1=1
+        '''
+        params = []
+
+        if level3 and level3 != '全部' and level3 != '':
+            query += ' AND d.area_level3 = ?'
+            params.append(level3)
+
+        if device_name and device_name != '':
+            query += ' AND d.device_name LIKE ?'
+            params.append(f'%{device_name}%')
+
+        if start_time:
+            query += ' AND r.start_time >= ?'
+            params.append(start_time)
+        if end_time:
+            query += ' AND r.end_time <= ?'
+            params.append(end_time)
+
+        query += ' ORDER BY r.start_time ASC LIMIT 500'
+
+        try:
+            self.cursor.execute(query, params)
+            records = self.cursor.fetchall()
+            columns = [description[0] for description in self.cursor.description]
+
+            result = []
+            for rec in records:
+                result.append({
+                    'record_id': rec[columns.index('record_id')],
+                    'device_id': rec[columns.index('device_id')],
+                    'device_name': rec[columns.index('device_name')],
+                    'area_level2': rec[columns.index('area_level2')],
+                    'area_level3': rec[columns.index('area_level3')],
+                    'start_time': rec[columns.index('start_time')],
+                    'end_time': rec[columns.index('end_time')],
+                    'duration': rec[columns.index('duration')],
+                    'avg_volume': rec[columns.index('avg_volume')],
+                    'status': rec[columns.index('status')] if 'status' in columns else 'online'
+                })
+            return result
+        except Exception as e:
+            logger.error(f"查询录音片段失败: {e}")
+            return []
+
+    def bind_area_device(self, level3: str, level4: str, device_ids: List[str]) -> bool:
+        """绑定区域和拾音器"""
+        try:
+            station = "重庆东站"
+            level2 = None
+            for l2, l3_map in self.area_data[station].items():
+                if level3 in l3_map:
+                    level2 = l2
+                    break
+
+            if not level2:
+                logger.error(f"未找到区域: {level3}")
+                return False
+
+            binding_id = f"BIND_{station}_{level2}_{level3}_{level4}".replace(" ", "_")
+
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO area_bindings 
+                (id, level1, level2, level3, level4, device_ids)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (binding_id, station, level2, level3, level4, json.dumps(device_ids)))
+            self.conn.commit()
+
+            if binding_id in self.area_bindings:
+                self.area_bindings[binding_id].device_ids = device_ids
+            else:
+                self.area_bindings[binding_id] = AreaBinding(
+                    id=binding_id,
+                    level1=station,
+                    level2=level2,
+                    level3=level3,
+                    level4=level4,
+                    device_ids=device_ids
+                )
+            
+            # 清除缓存
+            self._bindings_cache = None
+
+            logger.info(f"绑定成功: {level3} > {level4}, 绑定 {len(device_ids)} 个设备")
+            return True
+        except Exception as e:
+            logger.error(f"绑定失败: {e}")
+            return False
+
+    def unbind_area_device(self, binding_id: str) -> bool:
+        """解除区域绑定"""
+        try:
+            self.cursor.execute('DELETE FROM area_bindings WHERE id = ?', (binding_id,))
+            self.conn.commit()
+
+            if binding_id in self.area_bindings:
+                del self.area_bindings[binding_id]
+            
+            # 清除缓存
+            self._bindings_cache = None
+
+            logger.info(f"解绑成功: {binding_id}")
+            return True
+        except Exception as e:
+            logger.error(f"解绑失败: {e}")
+            return False
+
+    def get_unbound_devices_by_area(self, level3: str = None, level4: str = None) -> List[Dict]:
+        """获取指定区域未绑定的拾音器"""
+        bound_ids = set()
+        for binding in self.area_bindings.values():
+            bound_ids.update(binding.device_ids)
+
+        unbound = []
+        for device in self.devices.values():
+            if device.id not in bound_ids:
+                if level3 and device.area_level3 != level3:
                     continue
-                for station_name, station in stations.items():
-                    if path_list and len(path_list) > 3 and path_list[3] and path_list[3] != station_name:
-                        continue
+                if level4 and device.area_level4 != level4:
+                    continue
+                unbound.append({
+                    'id': device.id,
+                    'name': device.name,
+                    'area_level2': device.area_level2,
+                    'area_level3': device.area_level3,
+                    'area_level4': device.area_level4,
+                    'status': device.status.value
+                })
 
-                    basic = station.get('basic_info', {})
+        return unbound
 
-                    if level_filter and basic.get('车站等级') != level_filter:
-                        continue
+    def get_unbound_devices(self) -> List[Dict]:
+        """获取所有未绑定的拾音器"""
+        bound_ids = set()
+        for binding in self.area_bindings.values():
+            bound_ids.update(binding.device_ids)
 
-                    if 'station_basic' in data_types or 'all' in data_types:
-                        row = {
-                            '车站名称': station_name,
-                            '所属路局': bureau,
-                            '所属站段': section,
-                            '位置': f"{basic.get('省', '')} {basic.get('市', '')} {basic.get('区', '')} {basic.get('街道', '')}",
-                            '类别': basic.get('车站类别', ''),
-                            '站房资产所属单位': basic.get('站房资产所属单位', ''),
-                            '建设出资主体': basic.get('建设出资主体', ''),
-                            '资金来源': basic.get('资金来源', ''),
-                            '建设单位': basic.get('建设单位', ''),
-                            '建成时间': basic.get('建成时间', ''),
-                            '建设情况': basic.get('建设情况', ''),
-                            '是否涉及地方处置': basic.get('是否涉及地方处置', ''),
-                            '处置方式': basic.get('处置方式', ''),
-                            '处置进度': basic.get('处置进度', '')
-                        }
-                        all_data.append(row)
+        unbound = []
+        for device in self.devices.values():
+            if device.id not in bound_ids:
+                unbound.append({
+                    'id': device.id,
+                    'name': device.name,
+                    'area_level2': device.area_level2,
+                    'area_level3': device.area_level3,
+                    'area_level4': device.area_level4,
+                    'status': device.status.value
+                })
 
-                    if 'waiting_room' in data_types or 'all' in data_types:
-                        waiting_rooms = station.get('waiting_rooms', [])
-                        for wr in waiting_rooms:
-                            if room_type_filter and wr.get('type') != room_type_filter:
-                                continue
-                            
-                            row = {
-                                '车站名称': station_name,
-                                '所属路局': bureau,
-                                '所属站段': section,
-                                '候车室类型': wr.get('type', ''),
-                                '候车室名称': wr.get('name', ''),
-                                '装修出资主体': wr.get('装修出资主体', ''),
-                                '状态': wr.get('状态', ''),
-                                '是否有进站通道': basic.get('专用进站通道', ''),
-                                '是否有出站通道': basic.get('专用出站通道', ''),
-                                '是否有WiFi': basic.get('有wifi', ''),
-                                '营业开始时间': basic.get('营业时间_开始', ''),
-                                '营业结束时间': basic.get('营业时间_结束', ''),
-                                '服务人员': basic.get('服务人员数量', ''),
-                                '服务人员（人/班）': basic.get('服务人员_人每班', ''),
-                                '联系电话': basic.get('联系电话_座机', ''),
-                                '是否有接待台': wr.get('是否有接待台', ''),
-                                '是否有独立停车区': basic.get('独立停车区', ''),
-                                '停车位数': basic.get('停车位数量', ''),
-                                '登车提醒时间': basic.get('登车提醒时间', '')
-                            }
-                            all_data.append(row)
+        return unbound
 
-                    if 'facility_detail' in data_types or 'all' in data_types:
-                        all_facilities = []
-                        all_facilities.extend([(f, '开放休息区') for f in station.get('open_areas', [])])
-                        all_facilities.extend([(f, '大型休息厅') for f in station.get('large_halls', [])])
-                        all_facilities.extend([(f, '中型休息厅') for f in station.get('medium_halls', [])])
-                        all_facilities.extend([(f, '小型休息厅') for f in station.get('small_halls', [])])
-                        all_facilities.extend([(f, '会议室') for f in station.get('meeting_rooms', [])])
+    def get_statistics(self) -> Dict:
+        """获取统计信息（带缓存）"""
+        now = time.time()
+        if self._stats_cache and now - self._stats_cache_time < 3:
+            return self._stats_cache
+        
+        devices = self.get_devices()
+        online_count = len([d for d in devices if d['status'] == 'online'])
+        offline_count = len([d for d in devices if d['status'] == 'offline'])
+        alert_count = len([d for d in devices if d['status'] == 'alert'])
 
-                        for facility, fac_type in all_facilities:
-                            if facility_type_filter and fac_type != facility_type_filter:
-                                continue
+        result = {
+            'total_devices': len(devices),
+            'online_devices': online_count,
+            'offline_devices': offline_count,
+            'alert_devices': alert_count
+        }
+        
+        self._stats_cache = result
+        self._stats_cache_time = now
+        return result
 
-                            price_value = facility.get('price', facility.get('price_per_hour', 0))
-                            price_unit = '元/人/次' if fac_type == '开放休息区' else '元/小时'
-                            
-                            row = {
-                                '车站名称': station_name,
-                                '所属路局': bureau,
-                                '所属站段': section,
-                                '名称': facility.get('name', ''),
-                                '面积': facility.get('area', 0),
-                                '位置': facility.get('position', ''),
-                                '是否有卫生间': facility.get('has_toilet', ''),
-                                '是否有操作间': facility.get('has_kitchen', ''),
-                                '沙发数量': facility.get('sofa_count', 0),
-                                '座位数量': facility.get('seat_count', 0),
-                                '挂牌价（元/小时）': f"{price_value}{price_unit}",
-                                '装修程度': facility.get('decoration_level', '中等'),
-                                '装修描述': facility.get('decoration_desc', ''),
-                                '经营模式': facility.get('business_mode', ''),
-                                '经营主体': facility.get('business_subject', ''),
-                                '合作经营单位': facility.get('cooperation_unit', ''),
-                                '是否对外经营': '是' if facility.get('business_mode', '') != '内部' else '否',
-                                '对外经营收费标准': facility.get('fee_standard', ''),
-                                '是否有冠名': facility.get('has_naming', ''),
-                                '冠名单位': facility.get('naming_unit', ''),
-                                '合同到期': facility.get('contract_end_date', ''),
-                                '合同金额': facility.get('contract_amount', 0),
-                                '门头照片': facility.get('door_photo', '')
-                            }
-                            all_data.append(row)
+    def start(self):
+        """启动系统"""
+        self.is_recording = True
+        logger.info("系统已启动")
 
-                    if 'full_hierarchy' in data_types or 'all' in data_types:
-                        waiting_rooms = station.get('waiting_rooms', [])
-                        for wr in waiting_rooms:
-                            if room_type_filter and wr.get('type') != room_type_filter:
-                                continue
+    def stop(self):
+        """停止系统"""
+        self.is_recording = False
+        if self.p:
+            self.p.terminate()
+        self.conn.close()
+        logger.info("系统已停止")
 
-                            wr_type = wr.get('type', '')
-                            wr_name = wr.get('name', '')
 
-                            all_facilities = []
-                            all_facilities.extend([(f, '开放休息区') for f in station.get('open_areas', [])])
-                            all_facilities.extend([(f, '大型休息厅') for f in station.get('large_halls', [])])
-                            all_facilities.extend([(f, '中型休息厅') for f in station.get('medium_halls', [])])
-                            all_facilities.extend([(f, '小型休息厅') for f in station.get('small_halls', [])])
-                            all_facilities.extend([(f, '会议室') for f in station.get('meeting_rooms', [])])
+# 全局系统实例
+audio_system = AudioMonitorSystem()
 
-                            if all_facilities:
-                                for facility, fac_type in all_facilities:
-                                    if facility_type_filter and fac_type != facility_type_filter:
-                                        continue
 
-                                    price_value = facility.get('price', facility.get('price_per_hour', 0))
-                                    price_unit = '元/人/次' if fac_type == '开放休息区' else '元/小时'
+# Socket.IO事件处理
+@socketio.on('connect')
+def handle_connect():
+    logger.info(f"客户端连接: {request.sid}")
+    audio_system.clients.add(request.sid)
+    emit('connected', {'message': 'Connected to railway broadcast monitor'})
 
-                                    row = {
-                                        '国铁': railway,
-                                        '路局': bureau,
-                                        '站段': section,
-                                        '车站名称': station_name,
-                                        '位置': f"{basic.get('省', '')} {basic.get('市', '')} {basic.get('区', '')}",
-                                        '类别': basic.get('车站类别', ''),
-                                        '站房资产所属单位': basic.get('站房资产所属单位', ''),
-                                        '建设出资主体': basic.get('建设出资主体', ''),
-                                        '资金来源': basic.get('资金来源', ''),
-                                        '建设单位': basic.get('建设单位', ''),
-                                        '建成时间': basic.get('建成时间', ''),
-                                        '建设情况': basic.get('建设情况', ''),
-                                        '是否涉及地方处置': basic.get('是否涉及地方处置', ''),
-                                        '处置方式': basic.get('处置方式', ''),
-                                        '处置进度': basic.get('处置进度', ''),
-                                        '候车室类型': wr_type,
-                                        '候车室名称': wr_name,
-                                        '装修出资主体': wr.get('装修出资主体', ''),
-                                        '候车室状态': wr.get('状态', ''),
-                                        '是否有进站通道': basic.get('专用进站通道', ''),
-                                        '是否有出站通道': basic.get('专用出站通道', ''),
-                                        '是否有WiFi': basic.get('有wifi', ''),
-                                        '营业开始时间': basic.get('营业时间_开始', ''),
-                                        '营业结束时间': basic.get('营业时间_结束', ''),
-                                        '服务人员': basic.get('服务人员数量', ''),
-                                        '服务人员（人/班）': basic.get('服务人员_人每班', ''),
-                                        '联系电话': basic.get('联系电话_座机', ''),
-                                        '是否有接待台': wr.get('是否有接待台', ''),
-                                        '是否有独立停车区': basic.get('独立停车区', ''),
-                                        '停车位数': basic.get('停车位数量', ''),
-                                        '登车提醒时间': basic.get('登车提醒时间', ''),
-                                        '设施类型': fac_type,
-                                        '设施名称': facility.get('name', ''),
-                                        '设施面积': facility.get('area', 0),
-                                        '设施位置': facility.get('position', ''),
-                                        '是否有卫生间': facility.get('has_toilet', ''),
-                                        '是否有操作间': facility.get('has_kitchen', ''),
-                                        '沙发数量': facility.get('sofa_count', 0),
-                                        '座位数量': facility.get('seat_count', 0),
-                                        '挂牌价': f"{price_value}{price_unit}",
-                                        '装修程度': facility.get('decoration_level', '中等'),
-                                        '装修描述': facility.get('decoration_desc', ''),
-                                        '经营模式': facility.get('business_mode', ''),
-                                        '经营主体': facility.get('business_subject', ''),
-                                        '合作经营单位': facility.get('cooperation_unit', ''),
-                                        '是否对外经营': '是' if facility.get('business_mode', '') != '内部' else '否',
-                                        '对外经营收费标准': facility.get('fee_standard', ''),
-                                        '是否有冠名': facility.get('has_naming', ''),
-                                        '冠名单位': facility.get('naming_unit', ''),
-                                        '合同到期': facility.get('contract_end_date', ''),
-                                        '合同金额': facility.get('contract_amount', 0),
-                                        '门头照片': facility.get('door_photo', '')
-                                    }
-                                    all_data.append(row)
-                            else:
-                                row = {
-                                    '国铁': railway,
-                                    '路局': bureau,
-                                    '站段': section,
-                                    '车站名称': station_name,
-                                    '位置': f"{basic.get('省', '')} {basic.get('市', '')} {basic.get('区', '')}",
-                                    '类别': basic.get('车站类别', ''),
-                                    '站房资产所属单位': basic.get('站房资产所属单位', ''),
-                                    '建设出资主体': basic.get('建设出资主体', ''),
-                                    '资金来源': basic.get('资金来源', ''),
-                                    '建设单位': basic.get('建设单位', ''),
-                                    '建成时间': basic.get('建成时间', ''),
-                                    '建设情况': basic.get('建设情况', ''),
-                                    '是否涉及地方处置': basic.get('是否涉及地方处置', ''),
-                                    '处置方式': basic.get('处置方式', ''),
-                                    '处置进度': basic.get('处置进度', ''),
-                                    '候车室类型': wr_type,
-                                    '候车室名称': wr_name,
-                                    '装修出资主体': wr.get('装修出资主体', ''),
-                                    '候车室状态': wr.get('状态', ''),
-                                    '是否有进站通道': basic.get('专用进站通道', ''),
-                                    '是否有出站通道': basic.get('专用出站通道', ''),
-                                    '是否有WiFi': basic.get('有wifi', ''),
-                                    '营业开始时间': basic.get('营业时间_开始', ''),
-                                    '营业结束时间': basic.get('营业时间_结束', ''),
-                                    '服务人员': basic.get('服务人员数量', ''),
-                                    '服务人员（人/班）': basic.get('服务人员_人每班', ''),
-                                    '联系电话': basic.get('联系电话_座机', ''),
-                                    '是否有接待台': wr.get('是否有接待台', ''),
-                                    '是否有独立停车区': basic.get('独立停车区', ''),
-                                    '停车位数': basic.get('停车位数量', ''),
-                                    '登车提醒时间': basic.get('登车提醒时间', ''),
-                                    '设施类型': '-',
-                                    '设施名称': '-',
-                                    '设施面积': 0,
-                                    '设施位置': '-',
-                                    '是否有卫生间': '-',
-                                    '是否有操作间': '-',
-                                    '沙发数量': 0,
-                                    '座位数量': 0,
-                                    '挂牌价': '-',
-                                    '装修程度': '-',
-                                    '装修描述': '-',
-                                    '经营模式': '-',
-                                    '经营主体': '-',
-                                    '合作经营单位': '-',
-                                    '是否对外经营': '-',
-                                    '对外经营收费标准': '-',
-                                    '是否有冠名': '-',
-                                    '冠名单位': '-',
-                                    '合同到期': '-',
-                                    '合同金额': 0,
-                                    '门头照片': '-'
-                                }
-                                all_data.append(row)
 
-    if not all_data:
-        all_data.append({'提示': '没有符合条件的数据'})
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info(f"客户端断开: {request.sid}")
+    audio_system.clients.discard(request.sid)
 
-    df = pd.DataFrame(all_data)
 
-    output = BytesIO()
+# REST API路由
+@app.route('/')
+def index():
+    """主页"""
+    return render_template('index.html')
 
-    if export_format == 'csv':
-        csv_data = df.to_csv(index=False, encoding='utf-8-sig')
-        output = BytesIO()
-        output.write(csv_data.encode('utf-8-sig'))
-        output.seek(0)
-        return send_file(output, mimetype='text/csv;charset=utf-8-sig',
-                        as_attachment=True,
-                        download_name=f"车站设施数据导出_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    elif export_format == 'xlsx':
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='数据导出', index=False)
-        output.seek(0)
-        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        as_attachment=True,
-                        download_name=f"车站设施数据导出_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    else:
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='数据导出', index=False)
-        output.seek(0)
-        return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        as_attachment=True,
-                        download_name=f"车站设施数据导出_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+
+@app.route('/api/area/hierarchy')
+def get_area_hierarchy():
+    """获取区域层级"""
+    return jsonify({'success': True, 'data': audio_system.get_area_hierarchy()})
+
+
+@app.route('/api/area/bindings')
+def get_area_bindings():
+    """获取区域绑定列表（不包含详细位置）"""
+    bindings = audio_system.get_area_bindings()
+    return jsonify({'success': True, 'data': bindings})
+
+
+@app.route('/api/area/bindings/<binding_id>', methods=['DELETE'])
+def unbind_area_binding(binding_id):
+    """解除区域绑定"""
+    success = audio_system.unbind_area_device(binding_id)
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': '解绑失败'}), 400
+
+
+@app.route('/api/area/devices')
+def get_devices_by_area():
+    """根据区域获取拾音器（不包含详细位置）"""
+    level3 = request.args.get('level3')
+    level4 = request.args.get('level4')
+    devices = audio_system.get_devices_by_area(level3, level4)
+    return jsonify({'success': True, 'data': devices})
+
+
+@app.route('/api/area/bind', methods=['POST'])
+def bind_area_device():
+    """绑定区域和拾音器"""
+    data = request.json
+    success = audio_system.bind_area_device(
+        data.get('level3'),
+        data.get('level4'),
+        data.get('device_ids', [])
+    )
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': '绑定失败'}), 400
+
+
+@app.route('/api/devices/unbound')
+def get_unbound_devices():
+    """获取所有未绑定的拾音器"""
+    devices = audio_system.get_unbound_devices()
+    return jsonify({'success': True, 'data': devices})
+
+
+@app.route('/api/devices/unbound/by-area')
+def get_unbound_devices_by_area():
+    """根据区域获取未绑定的拾音器"""
+    level3 = request.args.get('level3')
+    level4 = request.args.get('level4')
+    devices = audio_system.get_unbound_devices_by_area(level3, level4)
+    return jsonify({'success': True, 'data': devices})
+
+
+@app.route('/api/devices')
+def get_devices():
+    """获取所有拾音器"""
+    devices = audio_system.get_devices()
+    return jsonify({'success': True, 'data': devices})
+
+
+@app.route('/api/recordings/by-device-time')
+def get_recordings_by_device_time():
+    """根据传感器名称、区域名称和时间段获取录音"""
+    device_name = request.args.get('device_name')
+    level3 = request.args.get('level3')
+    start_time = request.args.get('start_time')
+    end_time = request.args.get('end_time')
+
+    recordings = audio_system.get_recordings_by_device_and_time(device_name, level3, start_time, end_time)
+    return jsonify({'success': True, 'data': recordings})
+
+
+@app.route('/api/recordings/time-segments')
+def get_recordings_time_segments():
+    """获取时间段内的所有录音片段"""
+    device_name = request.args.get('device_name')
+    level3 = request.args.get('level3')
+    start_time = request.args.get('start_time')
+    end_time = request.args.get('end_time')
+
+    recordings = audio_system.get_recordings_by_time_range_with_segments(device_name, level3, start_time, end_time)
+    return jsonify({'success': True, 'data': recordings})
+
+
+@app.route('/api/statistics')
+def get_statistics():
+    """获取统计信息"""
+    stats = audio_system.get_statistics()
+    return jsonify({'success': True, 'data': stats})
 
 
 if __name__ == '__main__':
-    os.makedirs('templates', exist_ok=True)
-    os.makedirs('static/uploads', exist_ok=True)
-    app.run(debug=True, port=5000)
+    audio_system.start()
+    # 使用更少的worker，降低资源消耗
+    socketio.run(app, host='0.0.0.0', port=5003, debug=False, allow_unsafe_werkzeug=True)
